@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "linearreader",
+	"version": "${version}",
+	"name": "LinearReader",
+	"description": "A mod that uses .linear compression to reduce the file size of your world.",
+	"authors": ["Bugfunbug"],
+	"license": "MIT",
+	"environment": "server",
+	"entrypoints": {
+		"main": ["com.bugfunbug.linearreader.LinearReader"]
+	},
+	"mixins": ["linearreader.mixins.json"],
+	"depends": {
+		"fabricloader":  ">=0.15.0",
+		"minecraft":     "~1.20.1",
+		"java":          ">=17",
+		"cloth-config":  ">=13.0.0"
+	}
+}

@@ -1,0 +1,16 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "com.bugfunbug.linearreader.mixin",
+	"compatibilityLevel": "JAVA_17",
+	"refmap": "linearreader.refmap.json",
+	"mixins": [
+		"RegionFileStorageMixin",
+		"RegionFileMixin"
+	],
+	"client": [],
+	"server": [],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
