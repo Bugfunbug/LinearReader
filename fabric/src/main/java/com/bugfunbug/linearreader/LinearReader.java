@@ -99,24 +99,33 @@ public class LinearReader implements ModInitializer {
 
 	private static final AtomicInteger FLUSH_THREAD_N = new AtomicInteger(0);
 
-	private final ExecutorService flushExecutor = Executors.newFixedThreadPool(2, r -> {
-		Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
-		t.setDaemon(true);
-		t.setPriority(Thread.NORM_PRIORITY);
-		return t;
-	});
+	// Change from final to non-final:
+	private ExecutorService flushExecutor;
+	private Set<LinearRegionFile> inFlightFlushes;
 
-	private final Set<LinearRegionFile> inFlightFlushes =
-			Collections.newSetFromMap(new ConcurrentHashMap<>());
+	// Add a method to initialize/reinitialize executor state:
+	private void initExecutor() {
+		flushQueue.clear();
+		queuedRegions.clear();
+		inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
+		flushExecutor = Executors.newFixedThreadPool(2, r -> {
+			Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
+			t.setDaemon(true);
+			t.setPriority(Thread.NORM_PRIORITY);
+			return t;
+		});
+	}
 
 	/**
 	 * Submits a region eviction flush to the background executor.
 	 * Safe from any thread; no-op if already queued.
 	 */
 	public static void submitFlush(LinearRegionFile region) {
-		LinearReader inst = INSTANCE;
-		if (inst == null || inst.flushExecutor.isShutdown()) {
-			try   { region.flush(); }
+		LinearReader instance = INSTANCE;
+		if (instance == null
+				|| instance.flushExecutor == null
+				|| instance.flushExecutor.isShutdown()) {
+			try { region.flush(); }
 			catch (IOException e) {
 				LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
 						region, e.getMessage(), e);
@@ -126,14 +135,14 @@ public class LinearReader implements ModInitializer {
 			}
 			return;
 		}
-		if (!inst.inFlightFlushes.add(region)) return;
-		inst.flushExecutor.submit(() -> {
+		if (!instance.inFlightFlushes.add(region)) return;
+		instance.flushExecutor.submit(() -> {
 			try   { region.flush(); }
 			catch (IOException e) {
 				LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
 						region, e.getMessage(), e);
 			} finally {
-				inst.inFlightFlushes.remove(region);
+				instance.inFlightFlushes.remove(region);
 				LinearRegionFile.ALL_OPEN.remove(region);
 				region.releaseChunkData();
 			}
@@ -233,6 +242,7 @@ public class LinearReader implements ModInitializer {
 	// ── SERVER_STARTING ───────────────────────────────────────────────────────
 
 	private void onServerStarting(MinecraftServer server) {
+		initExecutor();  // recreate executor — handles singleplayer world reload
 		worldRoot = server.getWorldPath(LevelResource.ROOT);
 
 		// Remove leftover idle-recompressor temp files

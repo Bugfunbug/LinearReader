@@ -122,16 +122,22 @@ public class LinearReader {
     private static final java.util.concurrent.atomic.AtomicInteger FLUSH_THREAD_N =
             new java.util.concurrent.atomic.AtomicInteger(0);
 
-    private final ExecutorService flushExecutor = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
-        t.setDaemon(true);
-        t.setPriority(Thread.NORM_PRIORITY);
-        return t;
-    });
+    // Change from final to non-final:
+    private ExecutorService flushExecutor;
+    private Set<LinearRegionFile> inFlightFlushes;
 
-    /** Tracks regions with an in-flight flush to prevent double-submission. */
-    private final Set<LinearRegionFile> inFlightFlushes =
-            Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // Add a method to initialize/reinitialize executor state:
+    private void initExecutor() {
+        flushQueue.clear();
+        queuedRegions.clear();
+        inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
+        flushExecutor = Executors.newFixedThreadPool(2, r -> {
+            Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
+            t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY);
+            return t;
+        });
+    }
 
     /**
      * Submits a region flush to the background executor.
@@ -139,7 +145,9 @@ public class LinearReader {
      */
     public static void submitFlush(LinearRegionFile region) {
         LinearReader instance = INSTANCE;
-        if (instance == null || instance.flushExecutor.isShutdown()) {
+        if (instance == null
+                || instance.flushExecutor == null
+                || instance.flushExecutor.isShutdown()) {
             try { region.flush(); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
@@ -260,6 +268,7 @@ public class LinearReader {
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
+        initExecutor();  // recreate executor — handles singleplayer world reload
         MinecraftServer server = event.getServer();
         worldRoot = server.getWorldPath(LevelResource.ROOT);
 
