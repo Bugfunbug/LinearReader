@@ -8,6 +8,7 @@ import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.config.Property;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Watches server logs for Distant Horizons pregen start/stop messages and
@@ -49,6 +50,8 @@ public final class DHPregenMonitor {
     // -------------------------------------------------------------------------
 
     private static final AtomicBoolean PREGEN_ACTIVE = new AtomicBoolean(false);
+    /** Number of currently active Chunky tasks (one per dimension). */
+    private static final AtomicInteger CHUNKY_ACTIVE_TASKS = new AtomicInteger(0);
 
     // Written once before PREGEN_ACTIVE flips to true; volatile for cross-thread visibility.
     private static volatile int savedCacheSize;
@@ -86,7 +89,7 @@ public final class DHPregenMonitor {
      * Effective region cache size - capped at {@link #PREGEN_CACHE_SIZE} during pregen.
      */
     public static int effectiveCacheSize() {
-        if (!PREGEN_ACTIVE.get()) return LinearConfig.getRegionCacheSize();
+        if (!isPregenActive()) return LinearConfig.getRegionCacheSize();
         return Math.min(savedCacheSize, PREGEN_CACHE_SIZE);
     }
 
@@ -96,7 +99,7 @@ public final class DHPregenMonitor {
      * would double disk writes for zero benefit while DH rewrites everything anyway.
      */
     public static boolean isBackupEnabled() {
-        return !PREGEN_ACTIVE.get() && LinearConfig.isBackupEnabled();
+        return !isPregenActive() && LinearConfig.isBackupEnabled();
     }
 
     /**
@@ -105,7 +108,7 @@ public final class DHPregenMonitor {
      */
     public static int effectiveRegionsPerSaveTick() {
         int configured = LinearConfig.getRegionsPerSaveTick();
-        if (!PREGEN_ACTIVE.get()) return configured;
+        if (!isPregenActive()) return configured;
         return Math.max(configured, PREGEN_MIN_REGIONS_PER_TICK);
     }
 
@@ -142,8 +145,13 @@ public final class DHPregenMonitor {
     public static void notifyServerStopping() {
         if (PREGEN_ACTIVE.compareAndSet(true, false)) {
             LinearReader.LOGGER.info(
-                    "Server stopping during DH pregen - " +
-                    "pregen-mode overrides deactivated.");
+                    "Server stopping during DH pregen — pregen-mode overrides deactivated.");
+        }
+        int chunkyWas = CHUNKY_ACTIVE_TASKS.getAndSet(0);
+        if (chunkyWas > 0) {
+            LinearReader.LOGGER.info(
+                    "Server stopping with {} Chunky task(s) active — "
+                            + "Chunky pregen-mode deactivated.", chunkyWas);
         }
     }
 
@@ -179,6 +187,47 @@ public final class DHPregenMonitor {
         final String trimmed = triggerMessage.trim();
         logAsync("DH pregen ended (\"" + trimmed + "\") - " +
                 "pregen-mode deactivated, original settings restored.");
+    }
+
+    private static void onChunkyTaskStart(String msg) {
+        // Snapshot user values only on the first activation of anything
+        boolean wasInactive = !isPregenActive();
+        if (wasInactive) {
+            savedCacheSize          = LinearConfig.getRegionCacheSize();
+            savedRegionsPerSaveTick = LinearConfig.getRegionsPerSaveTick();
+        }
+        int current = CHUNKY_ACTIVE_TASKS.incrementAndGet();
+
+        final int cacheWas = savedCacheSize;
+        final int cacheNow = Math.min(savedCacheSize, PREGEN_CACHE_SIZE);
+        final int rptWas   = savedRegionsPerSaveTick;
+        final int rptNow   = Math.max(savedRegionsPerSaveTick, PREGEN_MIN_REGIONS_PER_TICK);
+        final String trimmed = msg.trim();
+
+        if (current == 1 && !PREGEN_ACTIVE.get()) {
+            // First activation overall — log full mode change
+            logAsync("Chunky pregen started (\"" + trimmed + "\") — pregen-mode active. "
+                    + "cacheSize " + cacheWas + " -> " + cacheNow
+                    + ", regionsPerSaveTick " + rptWas + " -> " + rptNow
+                    + ", backups suppressed.");
+        } else {
+            logAsync("Chunky pregen task started (" + current + " active): \"" + trimmed + "\".");
+        }
+    }
+
+    private static void onChunkyTaskEnd(String msg) {
+        int remaining = CHUNKY_ACTIVE_TASKS.decrementAndGet();
+        if (remaining < 0) {
+            CHUNKY_ACTIVE_TASKS.set(0);
+            return;
+        }
+        final String trimmed = msg.trim();
+        if (remaining == 0 && !PREGEN_ACTIVE.get()) {
+            logAsync("Chunky pregen ended (\"" + trimmed + "\") — "
+                    + "pregen-mode deactivated, original settings restored.");
+        } else {
+            logAsync("Chunky pregen task ended (" + remaining + " still active): \"" + trimmed + "\".");
+        }
     }
 
     /**
@@ -234,13 +283,22 @@ public final class DHPregenMonitor {
             String msg = event.getMessage().getFormattedMessage();
             if (msg == null) return;
 
-            // Fast pre-filter: most log lines won't contain "regen" at all.
-            if (!msg.contains("regen") && !msg.contains("Regen")) return;
+            // DH pregen
+            if (msg.contains("regen") || msg.contains("Regen")) {
+                if (msg.contains("Starting pregen.")) {
+                    onPregenStart();
+                } else if (msg.contains("Pregen is cancelled")) {
+                    onPregenEnd(msg);
+                }
+            }
 
-            if (msg.contains("Starting pregen.")) {
-                onPregenStart();
-            } else if (msg.contains("Pregen is cancelled")) {
-                onPregenEnd(msg);
+            // Chunky pregen
+            if (msg.contains("[Chunky]")) {
+                if (msg.contains("Task started")) {
+                    onChunkyTaskStart(msg);
+                } else if (msg.contains("Task finished") || msg.contains("Task stopped")) {
+                    onChunkyTaskEnd(msg);
+                }
             }
         }
     }
