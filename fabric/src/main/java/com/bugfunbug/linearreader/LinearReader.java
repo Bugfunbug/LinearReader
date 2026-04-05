@@ -26,8 +26,20 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -35,18 +47,17 @@ import java.util.stream.Stream;
 public class LinearReader implements ModInitializer {
 
 	public static final String MOD_ID = "linearreader";
-	public static final Logger LOGGER  = LogManager.getLogger(MOD_ID);
+	public static final Logger LOGGER = LogManager.getLogger(MOD_ID);
 
 	/** Singleton — set in onInitialize(); used by the static submitFlush(). */
 	private static volatile LinearReader INSTANCE;
 
 	private static final long LINEAR_SIGNATURE = 0xc3ff13183cca9d9aL;
 
-	// ── Pinning ───────────────────────────────────────────────────────────────
-
+	/** Absolute paths of pinned region files. Populated from disk on server start. */
 	private static final Set<Path> PINNED_PATHS = ConcurrentHashMap.newKeySet();
 
-	/** World root — set in SERVER_STARTING; used by command / pinning code. */
+	/** World root path — set in onServerStarting, used by pin commands. */
 	public static volatile Path worldRoot = null;
 
 	public static boolean isPinned(Path regionFilePath) {
@@ -55,8 +66,7 @@ public class LinearReader implements ModInitializer {
 
 	/**
 	 * Pin a region file so it is never evicted from the cache.
-	 * Saves the pins file immediately so that an unclean shutdown (e.g. C2ME
-	 * async thread timeout crashing the JVM) does not lose pin data.
+	 * Saves the pins file immediately so that an unclean shutdown does not lose pin data.
 	 */
 	public static void pinRegion(Path regionFilePath) {
 		PINNED_PATHS.add(regionFilePath.toAbsolutePath().normalize());
@@ -77,13 +87,14 @@ public class LinearReader implements ModInitializer {
 	}
 
 	/**
-	 * Maps a dimension ResourceKey to its region folder.
+	 * Maps a dimension ResourceKey to its region folder path under worldRoot.
+	 * Returns null if worldRoot is not yet set.
 	 */
 	public static Path regionFolderForDimension(ResourceKey<Level> dim) {
 		if (worldRoot == null) return null;
 		if (dim.equals(Level.OVERWORLD)) return worldRoot.resolve("region");
-		if (dim.equals(Level.NETHER))    return worldRoot.resolve("DIM-1").resolve("region");
-		if (dim.equals(Level.END))       return worldRoot.resolve("DIM1").resolve("region");
+		if (dim.equals(Level.NETHER)) return worldRoot.resolve("DIM-1").resolve("region");
+		if (dim.equals(Level.END)) return worldRoot.resolve("DIM1").resolve("region");
 		ResourceLocation id = dim.location();
 		return worldRoot.resolve("dimensions")
 				.resolve(id.getNamespace())
@@ -91,41 +102,129 @@ public class LinearReader implements ModInitializer {
 				.resolve("region");
 	}
 
-	// ── Async flush infrastructure ────────────────────────────────────────────
+	@FunctionalInterface
+	private interface RegionIoTask {
+		void run(LinearRegionFile region) throws IOException;
+	}
 
-	private final Deque<LinearRegionFile> flushQueue    = new ArrayDeque<>();
-	private final Set<LinearRegionFile>   queuedRegions =
+	/** Explicit save/close barriers should finish backups too. */
+	public static void flushRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
+		runRegionIoTasks(regions, "flush", region -> region.flush(true));
+	}
+
+	public static void closeRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
+		runRegionIoTasks(regions, "close", LinearRegionFile::close);
+	}
+
+	private static void runRegionIoTasks(List<LinearRegionFile> regions, String action,
+										 RegionIoTask task) throws IOException {
+		if (regions.isEmpty()) return;
+		if (regions.size() == 1) {
+			task.run(regions.get(0));
+			return;
+		}
+
+		int threadCount = Math.min(regions.size(),
+				Math.max(1, Math.min(Runtime.getRuntime().availableProcessors() / 2, 4)));
+		if (threadCount <= 1) {
+			IOException first = null;
+			for (LinearRegionFile region : regions) {
+				try { task.run(region); }
+				catch (IOException e) {
+					if (first == null) first = e;
+				}
+			}
+			if (first != null) throw first;
+			return;
+		}
+
+		ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
+			Thread t = new Thread(r, "linearreader-" + action + "-barrier");
+			t.setDaemon(true);
+			t.setPriority(Thread.NORM_PRIORITY);
+			return t;
+		});
+		List<Future<?>> futures = new ArrayList<>(regions.size());
+		try {
+			for (LinearRegionFile region : regions) {
+				futures.add(executor.submit(() -> {
+					task.run(region);
+					return null;
+				}));
+			}
+
+			IOException first = null;
+			for (Future<?> future : futures) {
+				try {
+					future.get();
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					if (first == null) {
+						first = new IOException("[LinearReader] Interrupted during blocking " + action + '.', e);
+					}
+				} catch (ExecutionException e) {
+					Throwable cause = e.getCause();
+					IOException io = cause instanceof IOException ioe
+							? ioe
+							: new IOException("[LinearReader] Blocking " + action + " failed", cause);
+					if (first == null) first = io;
+				}
+			}
+			if (first != null) throw first;
+		} finally {
+			executor.shutdownNow();
+		}
+	}
+
+	/**
+	 * Queue of dirty regions waiting to be flushed.
+	 * Fabric does not expose a direct world-save lifecycle hook here, so these
+	 * copies rely on the tick loop, explicit RegionFileStorage flush barriers,
+	 * and shutdown draining to get dirty regions durable.
+	 */
+	private final Deque<LinearRegionFile> flushQueue = new ArrayDeque<>();
+
+	// O(1) membership check — ArrayDeque.contains() is O(n).
+	private final Set<LinearRegionFile> queuedRegions =
 			Collections.newSetFromMap(new IdentityHashMap<>());
 
 	private static final AtomicInteger FLUSH_THREAD_N = new AtomicInteger(0);
 
-	// Change from final to non-final:
 	private ExecutorService flushExecutor;
 	private Set<LinearRegionFile> inFlightFlushes;
+	private boolean dedicatedServer;
+	private int tickCounter;
 
-	// Add a method to initialize/reinitialize executor state:
+	private int maxDirtyRegionsBeforePressureFlush() {
+		return dedicatedServer ? 64 : 24;
+	}
+
 	private void initExecutor() {
 		flushQueue.clear();
 		queuedRegions.clear();
+		tickCounter = 0;
 		inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
-		flushExecutor = Executors.newFixedThreadPool(2, r -> {
+		// Integrated servers share CPU with rendering, so keep background flushes gentler there.
+		final int threadCount = dedicatedServer ? 2 : 1;
+		final int threadPriority = dedicatedServer ? Thread.NORM_PRIORITY - 1 : Thread.MIN_PRIORITY + 1;
+		flushExecutor = Executors.newFixedThreadPool(threadCount, r -> {
 			Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
 			t.setDaemon(true);
-			t.setPriority(Thread.NORM_PRIORITY);
+			t.setPriority(threadPriority);
 			return t;
 		});
 	}
 
 	/**
-	 * Submits a region eviction flush to the background executor.
-	 * Safe from any thread; no-op if already queued.
+	 * Submits a region flush to the background executor.
+	 * Safe to call from any thread including c2me storage threads.
 	 */
 	public static void submitFlush(LinearRegionFile region) {
 		LinearReader instance = INSTANCE;
 		if (instance == null
 				|| instance.flushExecutor == null
 				|| instance.flushExecutor.isShutdown()) {
-			try { region.flush(); }
+			try { region.flush(false); }
 			catch (IOException e) {
 				LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
 						region, e.getMessage(), e);
@@ -137,7 +236,7 @@ public class LinearReader implements ModInitializer {
 		}
 		if (!instance.inFlightFlushes.add(region)) return;
 		instance.flushExecutor.submit(() -> {
-			try   { region.flush(); }
+			try { region.flush(false); }
 			catch (IOException e) {
 				LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
 						region, e.getMessage(), e);
@@ -148,8 +247,6 @@ public class LinearReader implements ModInitializer {
 			}
 		});
 	}
-
-	// ── ModInitializer entry point ────────────────────────────────────────────
 
 	@Override
 	public void onInitialize() {
@@ -171,19 +268,19 @@ public class LinearReader implements ModInitializer {
 		LOGGER.info("[LinearReader] Initialized — using .linear format exclusively.");
 	}
 
-	// ── Config ────────────────────────────────────────────────────────────────
-
 	private void pushConfig() {
 		FabricLinearConfig cfg =
 				AutoConfig.getConfigHolder(FabricLinearConfig.class).getConfig();
 		LinearConfig.update(
-				cfg.compressionLevel, cfg.regionCacheSize, cfg.backupEnabled,
-				cfg.backupUpdateInterval, cfg.regionsPerSaveTick,
-				cfg.slowIoThresholdMs, cfg.diskSpaceWarnGb
+				cfg.compressionLevel,
+				cfg.regionCacheSize,
+				cfg.backupEnabled,
+				cfg.backupUpdateInterval,
+				cfg.regionsPerSaveTick,
+				cfg.slowIoThresholdMs,
+				cfg.diskSpaceWarnGb
 		);
 	}
-
-	// ── Pin helpers ───────────────────────────────────────────────────────────
 
 	private void loadPins() {
 		Path pinsFile = worldRoot.resolve("data/linearreader/pinned_regions.txt");
@@ -197,26 +294,19 @@ public class LinearReader implements ModInitializer {
 				PINNED_PATHS.add(normalizedRoot.resolve(line).toAbsolutePath().normalize());
 				loaded++;
 			}
-			if (loaded > 0)
+			if (loaded > 0) {
 				LOGGER.info("[LinearReader] Loaded {} pinned region(s).", loaded);
+			}
 		} catch (IOException e) {
 			LOGGER.warn("[LinearReader] Could not load pin list: {}", e.getMessage());
 		}
 	}
 
-	/**
-	 * Writes pins to disk immediately on the calling thread.
-	 * Called from pinRegion() / unpinRegion() so that pins survive even if
-	 * the server crashes during shutdown (e.g. C2ME async timeout).
-	 */
 	private static void savePinsEagerly() {
 		if (worldRoot == null) return;
 		Path pinsFile = worldRoot.resolve("data/linearreader/pinned_regions.txt");
 		try {
 			Files.createDirectories(pinsFile.getParent());
-			// Normalize both sides to resolve symlinks consistently.
-			// On macOS, /Users paths can have symlink representations that
-			// make relativize() throw IllegalArgumentException unexpectedly.
 			Path normalizedRoot = worldRoot.toAbsolutePath().normalize();
 			List<String> lines = PINNED_PATHS.stream()
 					.map(p -> p.toAbsolutePath().normalize())
@@ -231,54 +321,51 @@ public class LinearReader implements ModInitializer {
 		}
 	}
 
-	/**
-	 * Called from onServerStopping as a belt-and-suspenders save.
-	 * savePinsEagerly() already keeps the file current on every pin/unpin.
-	 */
 	private void savePins() {
 		savePinsEagerly();
 	}
 
-	// ── SERVER_STARTING ───────────────────────────────────────────────────────
-
 	private void onServerStarting(MinecraftServer server) {
-		initExecutor();  // recreate executor — handles singleplayer world reload
+		dedicatedServer = server.isDedicatedServer();
+		initExecutor();
 		worldRoot = server.getWorldPath(LevelResource.ROOT);
 
-		// Remove leftover idle-recompressor temp files
-		try (Stream<Path> s = Files.walk(worldRoot)) {
-			s.filter(p -> p.getFileName().toString().endsWith(".recompress.wip"))
+		try (Stream<Path> stream = Files.walk(worldRoot)) {
+			stream.filter(p -> p.getFileName().toString().endsWith(".recompress.wip"))
 					.forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
 		} catch (IOException e) {
-			LOGGER.warn("[LinearReader] Could not clean .recompress.wip files: {}", e.getMessage());
+			LOGGER.warn("[LinearReader] Could not clean recompress temp files: {}", e.getMessage());
 		}
 
 		loadPins();
 
-		// .wip crash-recovery
-		int recovered = 0, deleted = 0;
-		try (Stream<Path> s = Files.walk(worldRoot)) {
-			Iterable<Path> wips = () -> s
+		int recovered = 0;
+		int deleted = 0;
+		try (Stream<Path> stream = Files.walk(worldRoot)) {
+			Iterable<Path> wips = () -> stream
 					.filter(Files::isRegularFile)
 					.filter(p -> p.getFileName().toString().endsWith(".linear.wip"))
 					.iterator();
+
 			for (Path wip : wips) {
-				String wipName  = wip.getFileName().toString();
+				String wipName = wip.getFileName().toString();
 				String realName = wipName.substring(0, wipName.length() - 4);
-				Path   realPath = wip.resolveSibling(realName);
+				Path realPath = wip.resolveSibling(realName);
+
 				if (isValidLinearFile(wip)) {
 					try {
 						Files.move(wip, realPath, StandardCopyOption.REPLACE_EXISTING);
-						LOGGER.warn("[LinearReader] Recovered .wip: {} -> {}", wipName, realName);
+						LOGGER.warn("[LinearReader] Recovered .wip file: {} -> {}",
+								wipName, realName);
 						recovered++;
 					} catch (IOException e) {
-						LOGGER.error("[LinearReader] Could not rename {}: {}",
-								wipName, e.getMessage());
+						LOGGER.error("[LinearReader] Could not rename {} to {}: {}",
+								wipName, realName, e.getMessage());
 					}
 				} else {
 					try {
 						Files.delete(wip);
-						LOGGER.warn("[LinearReader] Deleted incomplete .wip: {}", wipName);
+						LOGGER.warn("[LinearReader] Deleted incomplete .wip file: {}", wipName);
 						deleted++;
 					} catch (IOException e) {
 						LOGGER.error("[LinearReader] Could not delete {}: {}",
@@ -289,60 +376,87 @@ public class LinearReader implements ModInitializer {
 		} catch (IOException e) {
 			LOGGER.error("[LinearReader] Error scanning for .wip files: {}", e.getMessage(), e);
 		}
-		if (recovered > 0 || deleted > 0)
+
+		if (recovered > 0 || deleted > 0) {
 			LOGGER.info("[LinearReader] .wip recovery: {} recovered, {} deleted.",
 					recovered, deleted);
+		}
 	}
-
-	// ── SERVER_STOPPING ───────────────────────────────────────────────────────
 
 	private void onServerStopping(MinecraftServer server) {
 		IdleRecompressor.shutdown();
-		savePins();  // belt-and-suspenders — savePinsEagerly() already keeps file current
+		savePins();
 		DHPregenMonitor.notifyServerStopping();
 
-		Set<LinearRegionFile> toFlush = new HashSet<>(flushQueue);
-		for (LinearRegionFile r : LinearRegionFile.ALL_OPEN) {
-			if (r.isDirty()) toFlush.add(r);
-		}
 		flushQueue.clear();
 		queuedRegions.clear();
 
-		for (LinearRegionFile region : toFlush) {
-			if (inFlightFlushes.add(region)) {
-				flushExecutor.submit(() -> {
-					try   { region.flush(); }
-					catch (IOException e) {
-						LOGGER.error("[LinearReader] Shutdown flush failed for {}: {}",
-								region, e.getMessage(), e);
-					} finally {
-						inFlightFlushes.remove(region);
-					}
-				});
+		if (flushExecutor != null) {
+			flushExecutor.shutdownNow();
+		}
+		inFlightFlushes.clear();
+
+		try {
+			// Flush whatever is still dirty directly rather than waiting on the low-priority queue.
+			flushRegionsBlocking(dirtyRegionsSnapshot());
+		} catch (IOException e) {
+			LOGGER.error("[LinearReader] Shutdown blocking flush failed: {}", e.getMessage(), e);
+		}
+
+		if (flushExecutor != null) {
+			try {
+				if (!flushExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+					LOGGER.warn("[LinearReader] Flush executor did not finish within 10s on shutdown.");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				LOGGER.warn("[LinearReader] Interrupted while waiting for flush executor on shutdown.");
 			}
 		}
 
-		flushExecutor.shutdown();
 		try {
-			if (!flushExecutor.awaitTermination(60, TimeUnit.SECONDS))
-				LOGGER.warn("[LinearReader] Flush executor did not finish within 60s on shutdown.");
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			LOGGER.warn("[LinearReader] Interrupted waiting for flush executor on shutdown.");
+			flushRegionsBlocking(dirtyRegionsSnapshot());
+		} catch (IOException e) {
+			LOGGER.error("[LinearReader] Final shutdown flush failed: {}", e.getMessage(), e);
 		}
+
+		LinearRegionFile.shutdownBackupExecutor();
 		LOGGER.info("[LinearReader] Shutdown complete — all region flushes finished.");
 	}
 
-	// ── END_SERVER_TICK ───────────────────────────────────────────────────────
-
-	private int saveCheckTicker = 0;
+	private static List<LinearRegionFile> dirtyRegionsSnapshot() {
+		List<LinearRegionFile> dirty = new ArrayList<>();
+		for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+			if (region.isDirty()) dirty.add(region);
+		}
+		return dirty;
+	}
 
 	private void onServerTick(MinecraftServer server) {
-		// Queue dirty regions once per second
-		if (++saveCheckTicker >= 20) {
-			saveCheckTicker = 0;
+		tickCounter++;
+		if (tickCounter % 20 == 0) {
+			long nowNs = System.nanoTime();
+			List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
 			for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
-				if (region.isDirty() && queuedRegions.add(region)) {
+				if (region.shouldBackgroundFlush(nowNs)) {
+					if (queuedRegions.add(region)) {
+						flushQueue.add(region);
+					}
+					continue;
+				}
+				if (region.shouldPressureFlush(nowNs)) {
+					dirtyCandidates.add(region);
+				}
+			}
+
+			int dirtyLimit = maxDirtyRegionsBeforePressureFlush();
+			if (dirtyCandidates.size() > dirtyLimit) {
+				// If the dirty set keeps growing, flush the stalest regions first to cap RAM usage.
+				dirtyCandidates.sort(java.util.Comparator.comparingLong(LinearRegionFile::lastMutationTimeNs));
+				int toQueue = dirtyCandidates.size() - dirtyLimit;
+				for (int i = 0; i < toQueue; i++) {
+					LinearRegionFile region = dirtyCandidates.get(i);
+					if (!queuedRegions.add(region)) continue;
 					flushQueue.add(region);
 				}
 			}
@@ -361,7 +475,7 @@ public class LinearReader implements ModInitializer {
 			if (!inFlightFlushes.add(region)) continue;
 			submitted++;
 			flushExecutor.submit(() -> {
-				try   { region.flush(); }
+				try { region.flush(false); }
 				catch (IOException e) {
 					LOGGER.error("[LinearReader] Async flush failed for {}: {}",
 							region, e.getMessage(), e);
@@ -372,19 +486,17 @@ public class LinearReader implements ModInitializer {
 		}
 	}
 
-	// ── Helpers ───────────────────────────────────────────────────────────────
-
 	private static boolean isValidLinearFile(Path file) {
 		try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
 			long len = raf.length();
 			if (len < 40) return false;
 			byte[] buf = new byte[8];
 			raf.readFully(buf);
-			long header = ByteBuffer.wrap(buf).getLong();
+			long headerSig = ByteBuffer.wrap(buf).getLong();
 			raf.seek(len - 8);
 			raf.readFully(buf);
-			long footer = ByteBuffer.wrap(buf).getLong();
-			return header == LINEAR_SIGNATURE && footer == LINEAR_SIGNATURE;
+			long footerSig = ByteBuffer.wrap(buf).getLong();
+			return headerSig == LINEAR_SIGNATURE && footerSig == LINEAR_SIGNATURE;
 		} catch (IOException e) {
 			return false;
 		}

@@ -18,11 +18,13 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.jetbrains.annotations.Nullable;
 
+import org.jetbrains.annotations.Nullable;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 @Mixin(RegionFileStorage.class)
 public abstract class RegionFileStorageMixin {
@@ -33,8 +35,6 @@ public abstract class RegionFileStorageMixin {
     @Shadow @Final
     private boolean sync;
 
-    // Vanilla's own region cache — shadowed so getRegionFile() can populate it
-    // for c2me's IRegionFile.invokeWriteChunk path.
     @Shadow @Final
     private Long2ObjectLinkedOpenHashMap<RegionFile> regionCache;
 
@@ -45,18 +45,28 @@ public abstract class RegionFileStorageMixin {
     private void initLinearCache(CallbackInfo ci) {
         linearCache = new Long2ObjectLinkedOpenHashMap<>();
         if (folder == null) return;
-        // Convert any .mca files in this region folder before the first read/write.
-        // This runs synchronously inside the RegionFileStorage constructor, so it
-        // is guaranteed to complete before any chunk can be loaded or generated.
-        // This is the correct place — ServerStartingEvent fires too late on
-        // integrated servers because spawn chunk preparation happens before it.
         MCAConverter.convertFolder(folder);
         IdleRecompressor.registerFolder(folder);
     }
 
+    /**
+     * The ONLY method that needs the coarse RegionFileStorage lock.
+     * It protects the linearCache map (Long2ObjectLinkedOpenHashMap is not thread-safe).
+     *
+     * With lazy loading, this method never touches disk — it just does map operations
+     * and creates a LinearRegionFile shell. Disk I/O happens lazily under the
+     * per-region ReentrantReadWriteLock, completely outside this lock.
+     *
+     * Before lazy loading was added, this method called new LinearRegionFile() which
+     * called loadFromDisk() (5–300 ms) while holding this lock, serializing ALL
+     * chunk I/O for the dimension behind a single disk read. That was the root cause
+     * of 11000 ms read max times and chunk holes.
+     */
     @Unique
     @Nullable
-    private LinearRegionFile linearGetOrCreate(ChunkPos pos, boolean existingOnly) throws IOException {
+    private synchronized LinearRegionFile linearGetOrCreate(ChunkPos pos, boolean existingOnly) throws IOException {
+        if (folder == null) return null;
+
         long key = ChunkPos.asLong(pos.getRegionX(), pos.getRegionZ());
 
         LinearRegionFile cached = linearCache.getAndMoveToFirst(key);
@@ -66,27 +76,25 @@ public abstract class RegionFileStorageMixin {
         }
         LinearStats.recordCacheMiss();
 
-        // Use DHPregenMonitor.effectiveCacheSize() so that during DH pregen the
-        // cache is held at 8 entries instead of the default 256.  Each eviction
-        // submits a flush to the background executor, keeping memory usage
-        // proportional to PREGEN_CACHE_SIZE × (max region NBT size) rather than
-        // 256 × that — the difference between ~64 MB and ~2 GB peak residency.
         if (linearCache.size() >= DHPregenMonitor.effectiveCacheSize()) {
-            // Evict the LRU region that is not pinned.
-            // linearCache is ordered MRU-first, so the last key in iteration is LRU.
-            // We scan forward and keep the last non-pinned key we see.
-            long evictKey    = Long.MIN_VALUE;
+            long evictKey = Long.MIN_VALUE;
             for (long k : linearCache.keySet()) {
-                if (!LinearReader.isPinned(linearCache.get(k).getPath())) {
-                    evictKey = k; // keep scanning — want the LRU (last) non-pinned entry
+                LinearRegionFile candidate = linearCache.get(k);
+                // Never evict a region whose latest state is still only in memory.
+                if (candidate != null
+                        && !LinearReader.isPinned(candidate.getPath())
+                        && candidate.canEvictFromCache()) {
+                    evictKey = k;
                 }
             }
             if (evictKey != Long.MIN_VALUE) {
                 LinearRegionFile evicted = linearCache.remove(evictKey);
+                RegionFile staleWrapper = regionCache.remove(evictKey);
+                if (staleWrapper != null) {
+                    staleWrapper.close();
+                }
                 LinearReader.submitFlush(evicted);
             }
-            // If evictKey is still MIN_VALUE, every cached region is pinned.
-            // Allow the cache to grow past its limit rather than evict a pinned region.
         }
 
         Path linearPath = folder.resolve(
@@ -95,6 +103,7 @@ public abstract class RegionFileStorageMixin {
         if (existingOnly && !Files.exists(linearPath)) return null;
 
         Files.createDirectories(folder);
+        // Constructor is now instant — no disk I/O. Loading happens lazily on first access.
         LinearRegionFile region = new LinearRegionFile(linearPath, sync);
         linearCache.putAndMoveToFirst(key, region);
         return region;
@@ -103,6 +112,12 @@ public abstract class RegionFileStorageMixin {
     /**
      * @author LinearReader
      * @reason Replace Anvil (.mca) chunk reading with Linear (.linear) format.
+     *
+     * NOT synchronized — linearGetOrCreate() handles its own synchronization and is
+     * now fast (no disk I/O). The actual NbtIo.read() and region.read() (which triggers
+     * lazy disk loading if needed) run outside the coarse lock, so multiple threads can
+     * do chunk I/O concurrently for different regions. Per-region synchronization is
+     * handled by LinearRegionFile's own ReentrantReadWriteLock.
      */
     @Overwrite
     public CompoundTag read(ChunkPos pos) throws IOException {
@@ -111,7 +126,7 @@ public abstract class RegionFileStorageMixin {
         if (region == null) return null;
         try (DataInputStream dis = region.read(pos)) {
             if (dis == null) return null;
-            return NbtIo.read(dis);  // timing removed — handled inside LinearRegionFile.read()
+            return NbtIo.read(dis);
         } catch (IOException e) {
             LinearReader.LOGGER.error("[LinearReader] Failed to read chunk {}: {}",
                     pos, e.getMessage(), e);
@@ -122,6 +137,7 @@ public abstract class RegionFileStorageMixin {
     /**
      * @author LinearReader
      * @reason Replace Anvil (.mca) chunk writing with Linear (.linear) format.
+     *         Not synchronized — see read() javadoc.
      */
     @Overwrite
     protected void write(ChunkPos pos, @Nullable CompoundTag tag) throws IOException {
@@ -143,23 +159,23 @@ public abstract class RegionFileStorageMixin {
 
     /**
      * @author LinearReader
-     * @reason Return a LinearBackedRegionFile so c2me's direct RegionFile access
-     *         path (IRegionFile.invokeWriteChunk) is intercepted by RegionFileMixin.
+     * @reason Return a LinearBackedRegionFile for c2me's direct RegionFile access path.
+     *         Synchronized because it accesses both regionCache and linearCache.
      */
     @Overwrite
-    private RegionFile getRegionFile(ChunkPos pos) throws IOException {
+    private synchronized RegionFile getRegionFile(ChunkPos pos) throws IOException {
         long key = ChunkPos.asLong(pos.getRegionX(), pos.getRegionZ());
 
         RegionFile cached = regionCache.getAndMoveToFirst(key);
         if (cached != null) {
             if (cached instanceof LinearBackedRegionFile) {
-                linearGetOrCreate(pos, false);
+                linearCache.getAndMoveToFirst(key);
             }
             return cached;
         }
 
         if (regionCache.size() >= 256) {
-            regionCache.removeLast().close(); // no-op on LinearBackedRegionFile
+            regionCache.removeLast().close();
         }
 
         LinearRegionFile linear = linearGetOrCreate(pos, false);
@@ -170,52 +186,56 @@ public abstract class RegionFileStorageMixin {
 
     /**
      * @author LinearReader
-     * @reason Flush Linear region files instead of Anvil region files.
+     * @reason Flush Linear region files.
+     *         Snapshots the region list under lock, then flushes outside the lock so
+     *         flush I/O (which can take 100–5000ms) never blocks concurrent reads/writes.
      */
     @Overwrite
     public void flush() throws IOException {
-        IOException first = null;
-        for (LinearRegionFile region : linearCache.values()) {
-            try { region.flush(); }
-            catch (IOException e) {
-                LinearReader.LOGGER.error("[LinearReader] Flush error: {}", e.getMessage(), e);
-                if (first == null) first = e;
-            }
+        final List<LinearRegionFile> toFlush;
+        synchronized (this) {
+            toFlush = new ArrayList<>(linearCache.values());
         }
-        if (first != null) throw first;
+        try {
+            LinearReader.flushRegionsBlocking(toFlush);
+        } catch (IOException e) {
+            LinearReader.LOGGER.error("[LinearReader] Flush error: {}", e.getMessage(), e);
+            throw e;
+        }
     }
 
     /**
      * @author LinearReader
-     * @reason Close Linear region files instead of Anvil region files.
+     * @reason Close Linear region files.
+     *         Clears caches atomically under lock, then closes outside the lock.
      */
     @Overwrite
     public void close() throws IOException {
-        IOException first = null;
-        for (LinearRegionFile region : linearCache.values()) {
-            try { region.close(); }
-            catch (IOException e) {
-                LinearReader.LOGGER.error("[LinearReader] Close error: {}", e.getMessage(), e);
-                if (first == null) first = e;
-            }
+        final List<LinearRegionFile> toClose;
+        synchronized (this) {
+            toClose = new ArrayList<>(linearCache.values());
+            linearCache.clear();
+            regionCache.clear();
         }
-        linearCache.clear();
-        regionCache.clear();
-        if (first != null) throw first;
+        try {
+            LinearReader.closeRegionsBlocking(toClose);
+        } catch (IOException e) {
+            LinearReader.LOGGER.error("[LinearReader] Close error: {}", e.getMessage(), e);
+            throw e;
+        }
     }
 
     /**
      * @author LinearReader
      * @reason Replace Anvil scanChunk (used by POI system) with Linear format.
+     *         Not synchronized — region.read() handles lazy loading and its own locking.
      */
     @Overwrite
     public void scanChunk(ChunkPos pos, StreamTagVisitor visitor) throws IOException {
-        try {
-            LinearRegionFile region = linearGetOrCreate(pos, true);
-            if (region == null || !region.hasChunk(pos)) return;
-            try (DataInputStream dis = region.read(pos)) {
-                if (dis != null) NbtIo.parse(dis, visitor);
-            }
+        LinearRegionFile region = linearGetOrCreate(pos, true);
+        if (region == null) return;
+        try (DataInputStream dis = region.read(pos)) {
+            if (dis != null) NbtIo.parse(dis, visitor);
         } catch (IOException e) {
             LinearReader.LOGGER.error("[LinearReader] Failed to scan chunk {}: {}",
                     pos, e.getMessage(), e);

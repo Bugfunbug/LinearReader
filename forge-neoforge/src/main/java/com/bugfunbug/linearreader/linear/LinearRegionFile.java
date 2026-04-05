@@ -13,8 +13,11 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -44,19 +47,12 @@ public class LinearRegionFile {
     // One CRC32 per thread — avoids allocating a new CRC32 on every flush/verify.
     private static final ThreadLocal<CRC32> TL_CRC32 = ThreadLocal.withInitial(CRC32::new);
 
-    // Add this static executor near the top of the class, alongside TL_CRC32 etc.
     /**
      * Single-thread executor for backup writes.
      * Backups run at a higher compression level than live files, so write time is
      * significant — pushing them off the flush thread eliminates flush latency spikes.
      */
-    private static final java.util.concurrent.ExecutorService BACKUP_EXECUTOR =
-            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "lr-backup");
-                t.setDaemon(true);
-                t.setPriority(Thread.MIN_PRIORITY + 1);
-                return t;
-            });
+    private static volatile java.util.concurrent.ExecutorService backupExecutor = createBackupExecutor();
 
     /** Compression level for .bak files — higher than live since write speed is irrelevant. */
     private static final int BACKUP_COMPRESSION_LEVEL = 22;
@@ -70,6 +66,17 @@ public class LinearRegionFile {
     private static final ThreadLocal<Long> TL_LAST_DISK_CHECK =
             ThreadLocal.withInitial(() -> 0L);
 
+    /**
+     * Unlike vanilla, an open LinearRegionFile keeps decompressed chunk payloads in
+     * memory. A vanilla-sized cache across chunks, entities, and POI can easily
+     * balloon into hundreds of megabytes or more and trigger full-GC stalls.
+     */
+    private static final long RESIDENT_BUDGET_BYTES = computeResidentBudgetBytes();
+    // Background flushes should target regions that have actually gone quiet, not hot ones.
+    private static final long QUIET_FLUSH_DELAY_NS = 15_000_000_000L;
+    private static final long PRESSURE_FLUSH_MIN_AGE_NS = 3_000_000_000L;
+    private static final long BACKGROUND_FLUSH_COOLDOWN_NS = 15_000_000_000L;
+
     // Read-write lock: multiple threads can read chunks concurrently; writes are exclusive.
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -79,8 +86,15 @@ public class LinearRegionFile {
     public final int regionX;
     public final int regionZ;
 
-    private final byte[][] chunkData  = new byte[CHUNK_COUNT][];
-    private final int[]    timestamps = new int[CHUNK_COUNT];
+    /**
+     * Rewritten chunks live as standalone byte arrays here.
+     * Chunks loaded from disk can instead stay as slices of {@link #loadedBody}
+     * until they are modified, avoiding 1024 allocations and copies per load.
+     */
+    private final byte[][] chunkData    = new byte[CHUNK_COUNT][];
+    private final int[]    chunkSizes   = new int[CHUNK_COUNT];
+    private final int[]    chunkOffsets = new int[CHUNK_COUNT];
+    private final int[]    timestamps   = new int[CHUNK_COUNT];
 
     // Running counters updated incrementally on every chunk write,
     // eliminating the O(1024) scans the original code did on every flush.
@@ -90,9 +104,24 @@ public class LinearRegionFile {
 
     // volatile so isDirty() is always fresh across threads without a lock.
     private volatile boolean dirty = false;
+    private volatile boolean flushing = false;
+    private volatile long materializedBytes = 0L;
+    private volatile long lastAccessNs = System.nanoTime();
+    private volatile long lastMutationNs = lastAccessNs;
+    private volatile long lastSuccessfulFlushNs = 0L;
 
     private int     saveCount = 0;
     private boolean backedUp  = false;
+
+    // volatile so the fast-path check in loadIfNeeded() is always fresh without a lock.
+    private volatile boolean loaded = false;
+
+    /**
+     * Decompressed region body loaded from disk. Untouched chunks are served as
+     * slices of this array via {@link ByteArrayInputStream#ByteArrayInputStream(byte[], int, int)}.
+     */
+    @Nullable
+    private byte[] loadedBody;
 
     public LinearRegionFile(Path path, boolean dsync) throws IOException {
         this.path  = path;
@@ -102,20 +131,50 @@ public class LinearRegionFile {
         this.regionX = Integer.parseInt(parts[1]);
         this.regionZ = Integer.parseInt(parts[2]);
 
-        if (Files.exists(path)) {
-            boolean loaded = tryLoadOrRecover();
-            if (!loaded) {
-                LinearReader.LOGGER.error(
-                        "[LinearReader] r.{}.{}.linear could not be recovered. " +
-                                "The region will be regenerated by Minecraft.", regionX, regionZ);
-            } else if (DHPregenMonitor.isBackupEnabled()) {
-                // Skip initial backup creation when DH pregen is already running —
-                // we'd only be backing up a file we're about to overwrite heavily.
-                createBackupIfAbsent();
-            }
-        }
-
+        // Do NOT load from disk here. The constructor is called from inside the
+        // synchronized linearGetOrCreate(), so any disk I/O here would hold the
+        // coarse RegionFileStorage lock for the entire load duration — serializing
+        // all chunk I/O for the dimension. Loading happens lazily via loadIfNeeded().
         ALL_OPEN.add(this);
+    }
+
+    /**
+     * Loads this region's chunk data from disk on first access.
+     * Uses the region's own write lock (not the coarse RegionFileStorage lock),
+     * so only threads accessing THIS region are serialized — other regions load
+     * and serve chunks concurrently. The write lock is released before any caller
+     * proceeds to do actual chunk reads (which use the read lock), so read
+     * concurrency is fully preserved after the initial load completes.
+     * The volatile {@link #loaded} flag is the fast-path: once true, this method
+     * returns in nanoseconds without acquiring any lock.
+     */
+    private void loadIfNeeded() throws IOException {
+        if (loaded) return; // volatile read — no lock needed for the negative case
+        boolean becameLoaded = false;
+        lock.writeLock().lock();
+        try {
+            if (loaded) return; // double-check inside lock
+            if (Files.exists(path)) {
+                boolean ok = tryLoadOrRecover();
+                if (!ok) {
+                    LinearReader.LOGGER.error(
+                            "[LinearReader] r.{}.{}.linear could not be recovered. " +
+                                    "The region will be regenerated by Minecraft.", regionX, regionZ);
+                } else if (DHPregenMonitor.isBackupEnabled()) {
+                    backedUp = Files.exists(bakPath());
+                }
+            }
+            // Mark loaded regardless of whether the file existed — an absent file
+            // means a brand-new region; we start empty and dirty=false.
+            loaded = true;
+            becameLoaded = true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+        if (becameLoaded) {
+            markAccessed();
+            trimResidentDataCache(this);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -126,11 +185,134 @@ public class LinearRegionFile {
         return (pos.x & 31) + (pos.z & 31) * REGION_DIM;
     }
 
+    private static long computeResidentBudgetBytes() {
+        long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap <= 0L || maxHeap == Long.MAX_VALUE) {
+            return 256L * 1024L * 1024L;
+        }
+        long budget = maxHeap / 6L;
+        long min = 64L * 1024L * 1024L;
+        long max = 384L * 1024L * 1024L;
+        return Math.max(min, Math.min(max, budget));
+    }
+
+    private static java.util.concurrent.ExecutorService createBackupExecutor() {
+        return java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "lr-backup");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY + 1);
+            return t;
+        });
+    }
+
+    private static synchronized java.util.concurrent.ExecutorService getBackupExecutor() {
+        if (backupExecutor == null || backupExecutor.isShutdown() || backupExecutor.isTerminated()) {
+            backupExecutor = createBackupExecutor();
+        }
+        return backupExecutor;
+    }
+
+    private void markAccessed() {
+        lastAccessNs = System.nanoTime();
+    }
+
+    private void markDirtyNow() {
+        dirty = true;
+        lastMutationNs = System.nanoTime();
+    }
+
+    private int chunkLength(int idx) {
+        byte[] direct = chunkData[idx];
+        return direct != null ? direct.length : chunkSizes[idx];
+    }
+
+    private boolean chunkPresent(int idx) {
+        return chunkLength(idx) > 0;
+    }
+
+    private long residentBytesEstimate() {
+        if (!loaded) return 0L;
+        byte[] body = loadedBody;
+        return (body != null ? body.length : 0L) + materializedBytes;
+    }
+
+    private boolean isResidentTrimCandidate() {
+        return loaded && !dirty && !flushing && !LinearReader.isPinned(path);
+    }
+
+    private long releaseResidentDataIfPossible() {
+        lock.writeLock().lock();
+        try {
+            if (!loaded || dirty || flushing || LinearReader.isPinned(path)) return 0L;
+            long freed = residentBytesEstimate();
+            Arrays.fill(chunkData, null);
+            Arrays.fill(chunkSizes, 0);
+            Arrays.fill(chunkOffsets, 0);
+            Arrays.fill(timestamps, 0);
+            loadedBody = null;
+            chunkCount = 0;
+            totalDataBytes = 0L;
+            newestTimestamp = 0L;
+            materializedBytes = 0L;
+            loaded = false;
+            return freed;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private static void trimResidentDataCache(@Nullable LinearRegionFile keep) {
+        long residentBytes = 0L;
+        List<LinearRegionFile> candidates = new ArrayList<>();
+        for (LinearRegionFile region : ALL_OPEN) {
+            residentBytes += region.residentBytesEstimate();
+            if (region != keep && region.isResidentTrimCandidate()) {
+                candidates.add(region);
+            }
+        }
+        if (residentBytes <= RESIDENT_BUDGET_BYTES) return;
+
+        candidates.sort(Comparator.comparingLong(region -> region.lastAccessNs));
+        for (LinearRegionFile candidate : candidates) {
+            if (residentBytes <= RESIDENT_BUDGET_BYTES) break;
+            residentBytes -= candidate.releaseResidentDataIfPossible();
+        }
+    }
+
+    public boolean shouldBackgroundFlush(long nowNs) {
+        return dirty
+                && !flushing
+                && nowNs - lastMutationNs >= QUIET_FLUSH_DELAY_NS
+                && nowNs - lastSuccessfulFlushNs >= BACKGROUND_FLUSH_COOLDOWN_NS;
+    }
+
+    public boolean shouldPressureFlush(long nowNs) {
+        return dirty
+                && !flushing
+                && nowNs - lastMutationNs >= PRESSURE_FLUSH_MIN_AGE_NS
+                && nowNs - lastSuccessfulFlushNs >= BACKGROUND_FLUSH_COOLDOWN_NS;
+    }
+
+    public long lastMutationTimeNs() {
+        return lastMutationNs;
+    }
+
+    public boolean canEvictFromCache() {
+        return !dirty && !flushing;
+    }
+
     public boolean hasChunk(ChunkPos pos) {
+        try {
+            loadIfNeeded();
+        } catch (IOException e) {
+            LinearReader.LOGGER.error("[LinearReader] Failed to load region in hasChunk for {}: {}",
+                    pos, e.getMessage());
+            return false;
+        }
+        markAccessed();
         lock.readLock().lock();
         try {
-            byte[] d = chunkData[indexOf(pos)];
-            return d != null && d.length > 0;
+            return chunkPresent(indexOf(pos));
         } finally {
             lock.readLock().unlock();
         }
@@ -141,15 +323,29 @@ public class LinearRegionFile {
      * Called when c2me's backlog flush invokes RegionFile.clear(ChunkPos).
      */
     public void clearChunk(ChunkPos pos) {
+        try {
+            loadIfNeeded();
+        } catch (IOException e) {
+            LinearReader.LOGGER.error("[LinearReader] Failed to load region in clearChunk for {}: {}",
+                    pos, e.getMessage());
+            return;
+        }
+        markAccessed();
         lock.writeLock().lock();
         try {
-            int    idx = indexOf(pos);
-            byte[] old = chunkData[idx];
-            if (old != null && old.length > 0) {
+            int idx = indexOf(pos);
+            int oldLen = chunkLength(idx);
+            byte[] oldDirect = chunkData[idx];
+            int oldDirectLen = oldDirect != null ? oldDirect.length : 0;
+            if (oldLen > 0) {
                 chunkData[idx] = null;
+                chunkSizes[idx] = 0;
+                chunkOffsets[idx] = 0;
+                timestamps[idx] = 0;
                 chunkCount--;
-                totalDataBytes -= old.length;
-                dirty = true;
+                totalDataBytes -= oldLen;
+                materializedBytes -= oldDirectLen;
+                markDirtyNow();
             }
         } finally {
             lock.writeLock().unlock();
@@ -157,18 +353,25 @@ public class LinearRegionFile {
     }
 
     @Nullable
-    public DataInputStream read(ChunkPos pos) {
+    public DataInputStream read(ChunkPos pos) throws IOException {
+        loadIfNeeded(); // outside read lock — loadIfNeeded uses write lock internally
+        markAccessed();
         lock.readLock().lock();
         try {
-            byte[] d = chunkData[indexOf(pos)];
-            if (d == null || d.length == 0) return null;
-
-            // Record the read here rather than in the mixin so C2ME's async
-            // read path gets counted too. The "work" being timed is the
-            // array copy inside ByteArrayInputStream's constructor + the
-            // DataInputStream wrapper — negligible but consistent.
+            int idx = indexOf(pos);
+            byte[] direct = chunkData[idx];
+            int len = direct != null ? direct.length : chunkSizes[idx];
+            if (len == 0) return null;
             long t = System.nanoTime();
-            DataInputStream dis = new DataInputStream(new ByteArrayInputStream(d));
+            ByteArrayInputStream in;
+            if (direct != null) {
+                in = new ByteArrayInputStream(direct);
+            } else {
+                byte[] body = loadedBody;
+                if (body == null) return null;
+                in = new ByteArrayInputStream(body, chunkOffsets[idx], len);
+            }
+            DataInputStream dis = new DataInputStream(in);
             LinearStats.recordChunkRead(System.nanoTime() - t);
             return dis;
         } finally {
@@ -181,12 +384,15 @@ public class LinearRegionFile {
      * NBT serialisation happens entirely outside any lock; the write lock is taken
      * only for the brief pointer-swap at the end of close().
      */
-    public DataOutputStream write(ChunkPos pos) {
-        final int idx = indexOf(pos);
+    public DataOutputStream write(ChunkPos pos) throws IOException {
+        // Load existing chunks before writing so we don't lose data in other slots.
+        // This must happen before creating the ByteArrayOutputStream so that if
+        // loading fails we throw immediately rather than silently losing the write.
+        loadIfNeeded();
+        markAccessed();
 
-        // Racy read is intentional — only a capacity hint for the BAOS.
-        byte[] prev = chunkData[idx];
-        int hint = (prev != null && prev.length > 0) ? prev.length : 8192;
+        final int idx = indexOf(pos);
+        int hint = Math.max(chunkLength(idx), 8192);
 
         ByteArrayOutputStream boas = new ByteArrayOutputStream(hint) {
             @Override
@@ -196,18 +402,22 @@ public class LinearRegionFile {
                 int ts = (int) (System.currentTimeMillis() / 1000L);
                 lock.writeLock().lock();
                 try {
-                    byte[] old   = chunkData[idx];
-                    int    oldLen = (old != null) ? old.length : 0;
+                    byte[] oldDirect = chunkData[idx];
+                    int oldDirectLen = oldDirect != null ? oldDirect.length : 0;
+                    int oldLen = chunkLength(idx);
 
-                    chunkData[idx]  = newData;
+                    chunkData[idx] = newData;
+                    chunkSizes[idx] = newData.length;
+                    chunkOffsets[idx] = 0;
                     timestamps[idx] = ts;
                     if (ts > newestTimestamp) newestTimestamp = ts;
 
                     if (oldLen == 0 && newData.length > 0) chunkCount++;
                     else if (oldLen > 0 && newData.length == 0) chunkCount--;
                     totalDataBytes += newData.length - oldLen;
+                    materializedBytes += newData.length - oldDirectLen;
 
-                    dirty = true;
+                    markDirtyNow();
                 } finally {
                     lock.writeLock().unlock();
                 }
@@ -224,50 +434,74 @@ public class LinearRegionFile {
      * chunk reads and writes continue while a flush is in progress.
      */
     public void flush() throws IOException {
+        flush(true);
+    }
+
+    public void flush(boolean allowBackup) throws IOException {
         if (!dirty) return; // fast volatile read before acquiring any lock
 
         final byte[][] dataSnap;
+        final int[]    sizeSnap;
+        final int[]    offsetSnap;
         final int[]    tsSnap;
         final long     newestTsSnap;
         final int      countSnap;
         final long     totalBytesSnap;
+        final byte[]   bodySnap;
 
         lock.writeLock().lock();
         try {
             if (!dirty) return; // double-check after lock
-            dataSnap       = chunkData.clone();  // shallow: copies 1024 refs (8 KB)
-            tsSnap         = timestamps.clone();
-            newestTsSnap   = newestTimestamp;
-            countSnap      = chunkCount;
+            dataSnap = chunkData.clone();
+            sizeSnap = chunkSizes.clone();
+            offsetSnap = chunkOffsets.clone();
+            tsSnap = timestamps.clone();
+            newestTsSnap = newestTimestamp;
+            countSnap = chunkCount;
             totalBytesSnap = totalDataBytes;
-            dirty          = false;
+            bodySnap = loadedBody;
+            flushing = true;
+            dirty = false;
         } finally {
             lock.writeLock().unlock();
         }
 
-        boolean ioOk = false;
         try {
-            writeToDisk(dataSnap, tsSnap, newestTsSnap, countSnap, totalBytesSnap);
-            ioOk = true;
-        } finally {
-            if (!ioOk) {
-                lock.writeLock().lock();
-                try { dirty = true; } finally { lock.writeLock().unlock(); }
+            boolean ioOk = false;
+            try {
+                writeToDisk(dataSnap, sizeSnap, offsetSnap, tsSnap, bodySnap,
+                        newestTsSnap, countSnap, totalBytesSnap);
+                ioOk = true;
+                lastSuccessfulFlushNs = System.nanoTime();
+            } finally {
+                if (!ioOk) {
+                    lock.writeLock().lock();
+                    try { dirty = true; } finally { lock.writeLock().unlock(); }
+                }
             }
-        }
 
-        // Post-I/O bookkeeping — use DHPregenMonitor so backups are suppressed during pregen.
-        final boolean shouldRefreshBackup;
-        lock.writeLock().lock();
-        try {
-            saveCount++;
-            shouldRefreshBackup = DHPregenMonitor.isBackupEnabled()
-                    && saveCount % LinearConfig.getBackupUpdateInterval() == 0;
+            // Backups are best-effort and are intentionally skipped on hot background flushes.
+            if (allowBackup) {
+                final boolean shouldCreateBackup;
+                final boolean shouldRefreshBackup;
+                lock.writeLock().lock();
+                try {
+                    saveCount++;
+                    shouldCreateBackup = DHPregenMonitor.isBackupEnabled() && !backedUp;
+                    shouldRefreshBackup = DHPregenMonitor.isBackupEnabled()
+                            && backedUp
+                            && saveCount % LinearConfig.getBackupUpdateInterval() == 0;
+                } finally {
+                    lock.writeLock().unlock();
+                }
+
+                if (shouldCreateBackup) createBackupIfAbsent();
+                if (shouldRefreshBackup) refreshBackup();
+            }
         } finally {
-            lock.writeLock().unlock();
+            flushing = false;
         }
-
-        if (shouldRefreshBackup) refreshBackup();
+        trimResidentDataCache(this);
     }
 
     public void close() throws IOException {
@@ -292,8 +526,15 @@ public class LinearRegionFile {
         lock.writeLock().lock();
         try {
             Arrays.fill(chunkData, null);
+            Arrays.fill(chunkSizes, 0);
+            Arrays.fill(chunkOffsets, 0);
+            Arrays.fill(timestamps, 0);
+            loadedBody = null;
             chunkCount     = 0;
             totalDataBytes = 0L;
+            newestTimestamp = 0L;
+            materializedBytes = 0L;
+            loaded = false;
         } finally {
             lock.writeLock().unlock();
         }
@@ -441,14 +682,13 @@ public class LinearRegionFile {
             throw new IOException("[LinearReader] Decompressed body too short in: " + src);
 
         ByteBuffer inner  = ByteBuffer.wrap(decompressed, 0, INNER_HEADER_SIZE);
-        int[]      sizes  = new int[CHUNK_COUNT];
         int        totalSz    = 0;
         int        realCount  = 0;
         for (int i = 0; i < CHUNK_COUNT; i++) {
-            sizes[i]      = inner.getInt();
+            chunkSizes[i] = inner.getInt();
             timestamps[i] = inner.getInt();
-            totalSz      += sizes[i];
-            if (sizes[i] > 0) realCount++;
+            totalSz      += chunkSizes[i];
+            if (chunkSizes[i] > 0) realCount++;
         }
 
         if (INNER_HEADER_SIZE + totalSz != decompressed.length)
@@ -459,13 +699,14 @@ public class LinearRegionFile {
             throw new IOException("[LinearReader] Chunk count mismatch in: " + src
                     + " (header says " + storedCount + ", counted " + realCount + ")");
 
+        Arrays.fill(chunkData, null);
+        loadedBody = decompressed;
+        materializedBytes = 0L;
+
         int offset = INNER_HEADER_SIZE;
         for (int i = 0; i < CHUNK_COUNT; i++) {
-            if (sizes[i] > 0) {
-                chunkData[i] = new byte[sizes[i]];
-                System.arraycopy(decompressed, offset, chunkData[i], 0, sizes[i]);
-            }
-            offset += sizes[i];
+            chunkOffsets[i] = chunkSizes[i] > 0 ? offset : 0;
+            offset += chunkSizes[i];
         }
 
         this.newestTimestamp = newestTs;
@@ -490,7 +731,8 @@ public class LinearRegionFile {
      * Serializes and atomically writes a data snapshot to disk.
      * Called from flush() after the lock has been released.
      */
-    private void writeToDisk(byte[][] dataSnap, int[] tsSnap,
+    private void writeToDisk(byte[][] dataSnap, int[] sizeSnap, int[] offsetSnap,
+                             int[] tsSnap, @Nullable byte[] bodySnap,
                              long newestTsSnap, int countSnap, long totalBytesSnap)
             throws IOException {
 
@@ -528,11 +770,23 @@ public class LinearRegionFile {
 
         ByteBuffer bodyBuf = ByteBuffer.wrap(body, 0, bodySize);
         for (int i = 0; i < CHUNK_COUNT; i++) {
-            bodyBuf.putInt(dataSnap[i] != null ? dataSnap[i].length : 0);
+            int len = dataSnap[i] != null ? dataSnap[i].length : sizeSnap[i];
+            bodyBuf.putInt(len);
             bodyBuf.putInt(tsSnap[i]);
         }
         for (int i = 0; i < CHUNK_COUNT; i++) {
-            if (dataSnap[i] != null) bodyBuf.put(dataSnap[i]);
+            byte[] direct = dataSnap[i];
+            if (direct != null) {
+                bodyBuf.put(direct);
+                continue;
+            }
+            int len = sizeSnap[i];
+            if (len > 0) {
+                if (bodySnap == null) {
+                    throw new IOException("[LinearReader] Missing loaded body while flushing " + path.getFileName());
+                }
+                bodyBuf.put(bodySnap, offsetSnap[i], len);
+            }
         }
 
         int    maxCompLen    = (int) Zstd.compressBound(bodySize);
@@ -601,31 +855,42 @@ public class LinearRegionFile {
         Path bak = bakPath();
         if (Files.exists(bak)) return;
         final Path src = path;
-        BACKUP_EXECUTOR.submit(() -> {
-            try {
-                IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
-                LinearReader.LOGGER.debug("[LinearReader] Created backup: {}", bak.getFileName());
-            } catch (IOException e) {
-                LinearReader.LOGGER.warn("[LinearReader] Could not create backup for {}: {}",
-                        src.getFileName(), e.getMessage());
-                backedUp = false; // allow retry on next flush
-            }
-        });
+        try {
+            getBackupExecutor().submit(() -> {
+                try {
+                    IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
+                    LinearReader.LOGGER.debug("[LinearReader] Created backup: {}", bak.getFileName());
+                } catch (IOException e) {
+                    LinearReader.LOGGER.warn("[LinearReader] Could not create backup for {}: {}",
+                            src.getFileName(), e.getMessage());
+                    backedUp = false; // allow retry on next flush
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            backedUp = false;
+            LinearReader.LOGGER.warn("[LinearReader] Backup task rejected for {}: {}",
+                    src.getFileName(), e.getMessage());
+        }
     }
 
     private void refreshBackup() {
         Path bak = bakPath();
         final Path src = path;
-        BACKUP_EXECUTOR.submit(() -> {
-            try {
-                IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
-                LinearReader.LOGGER.debug("[LinearReader] Refreshed backup: {} (after {} saves)",
-                        bak.getFileName(), saveCount);
-            } catch (IOException e) {
-                LinearReader.LOGGER.warn("[LinearReader] Could not refresh backup for {}: {}",
-                        src.getFileName(), e.getMessage());
-            }
-        });
+        try {
+            getBackupExecutor().submit(() -> {
+                try {
+                    IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
+                    LinearReader.LOGGER.debug("[LinearReader] Refreshed backup: {} (after {} saves)",
+                            bak.getFileName(), saveCount);
+                } catch (IOException e) {
+                    LinearReader.LOGGER.warn("[LinearReader] Could not refresh backup for {}: {}",
+                            src.getFileName(), e.getMessage());
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            LinearReader.LOGGER.warn("[LinearReader] Backup refresh task rejected for {}: {}",
+                    src.getFileName(), e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -667,7 +932,6 @@ public class LinearRegionFile {
                             "CRC32 mismatch (expected " + storedCRC + ", got " + crc.getValue() + ")");
             }
 
-            // was: return VerifyResult.ok();
             return VerifyResult.ok(storedCRC != 0L);
         } catch (IOException e) {
             return VerifyResult.fail("I/O error: " + e.getMessage());
@@ -690,17 +954,25 @@ public class LinearRegionFile {
 
     /**
      * Shuts down the backup executor on server stop.
-     * Waits up to 30 seconds for any in-flight backup writes to finish
-     * so we don't leave partial .bak files on disk.
+     * Backup writes use a separate .recompress.wip + atomic rename path, so they
+     * are safe to abandon on shutdown. Give them a brief grace period, then stop
+     * waiting so singleplayer logout is never held hostage by best-effort backups.
      */
     public static void shutdownBackupExecutor() {
-        BACKUP_EXECUTOR.shutdown();
+        java.util.concurrent.ExecutorService executor;
+        synchronized (LinearRegionFile.class) {
+            executor = backupExecutor;
+            backupExecutor = null;
+        }
+        if (executor == null) return;
+        executor.shutdown();
         try {
-            if (!BACKUP_EXECUTOR.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
-                LinearReader.LOGGER.warn("[LinearReader] Backup executor did not finish within 30s on shutdown.");
+            if (!executor.awaitTermination(250, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                executor.shutdownNow();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            executor.shutdownNow();
         }
     }
 }

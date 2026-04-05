@@ -6,7 +6,6 @@ import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.DHPregenMonitor;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
-import com.bugfunbug.linearreader.linear.MCAConverter;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraftforge.common.MinecraftForge;
@@ -30,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Deque;
@@ -37,8 +37,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -107,6 +109,79 @@ public class LinearReader {
                 .resolve("region");
     }
 
+    @FunctionalInterface
+    private interface RegionIoTask {
+        void run(LinearRegionFile region) throws IOException;
+    }
+
+    /** Explicit save/close barriers should finish backups too. */
+    public static void flushRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
+        runRegionIoTasks(regions, "flush", region -> region.flush(true));
+    }
+
+    public static void closeRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
+        runRegionIoTasks(regions, "close", LinearRegionFile::close);
+    }
+
+    private static void runRegionIoTasks(List<LinearRegionFile> regions, String action,
+                                         RegionIoTask task) throws IOException {
+        if (regions.isEmpty()) return;
+        if (regions.size() == 1) {
+            task.run(regions.get(0));
+            return;
+        }
+
+        int threadCount = Math.min(regions.size(),
+                Math.max(1, Math.min(Runtime.getRuntime().availableProcessors() / 2, 4)));
+        if (threadCount <= 1) {
+            IOException first = null;
+            for (LinearRegionFile region : regions) {
+                try { task.run(region); }
+                catch (IOException e) {
+                    if (first == null) first = e;
+                }
+            }
+            if (first != null) throw first;
+            return;
+        }
+
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
+            Thread t = new Thread(r, "linearreader-" + action + "-barrier");
+            t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY);
+            return t;
+        });
+        List<Future<?>> futures = new ArrayList<>(regions.size());
+        try {
+            for (LinearRegionFile region : regions) {
+                futures.add(executor.submit(() -> {
+                    task.run(region);
+                    return null;
+                }));
+            }
+
+            IOException first = null;
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    if (first == null) first = new IOException(
+                            "[LinearReader] Interrupted during blocking " + action + '.', e);
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    IOException io = cause instanceof IOException ioe
+                            ? ioe
+                            : new IOException("[LinearReader] Blocking " + action + " failed", cause);
+                    if (first == null) first = io;
+                }
+            }
+            if (first != null) throw first;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     /**
      * Queue of dirty regions waiting to be flushed.
      * Both onLevelSave and onServerTick run on the server main thread,
@@ -118,23 +193,30 @@ public class LinearReader {
     private final Set<LinearRegionFile> queuedRegions =
             Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
-    // Two flush threads: regions compress and write in parallel.
     private static final java.util.concurrent.atomic.AtomicInteger FLUSH_THREAD_N =
             new java.util.concurrent.atomic.AtomicInteger(0);
 
-    // Change from final to non-final:
     private ExecutorService flushExecutor;
     private Set<LinearRegionFile> inFlightFlushes;
+    private boolean dedicatedServer;
+    private int tickCounter;
 
-    // Add a method to initialize/reinitialize executor state:
+    private int maxDirtyRegionsBeforePressureFlush() {
+        return dedicatedServer ? 64 : 24;
+    }
+
     private void initExecutor() {
         flushQueue.clear();
         queuedRegions.clear();
+        tickCounter = 0;
         inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
-        flushExecutor = Executors.newFixedThreadPool(2, r -> {
+        // Integrated servers share CPU with rendering, so keep background flushes gentler there.
+        final int threadCount = dedicatedServer ? 2 : 1;
+        final int threadPriority = dedicatedServer ? Thread.NORM_PRIORITY - 1 : Thread.MIN_PRIORITY + 1;
+        flushExecutor = Executors.newFixedThreadPool(threadCount, r -> {
             Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
             t.setDaemon(true);
-            t.setPriority(Thread.NORM_PRIORITY);
+            t.setPriority(threadPriority);
             return t;
         });
     }
@@ -148,7 +230,7 @@ public class LinearReader {
         if (instance == null
                 || instance.flushExecutor == null
                 || instance.flushExecutor.isShutdown()) {
-            try { region.flush(); }
+            try { region.flush(false); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -160,7 +242,7 @@ public class LinearReader {
         }
         if (!instance.inFlightFlushes.add(region)) return;
         instance.flushExecutor.submit(() -> {
-            try { region.flush(); }
+            try { region.flush(false); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -268,8 +350,9 @@ public class LinearReader {
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
-        initExecutor();  // recreate executor — handles singleplayer world reload
         MinecraftServer server = event.getServer();
+        dedicatedServer = server.isDedicatedServer();
+        initExecutor();  // recreate executor — handles singleplayer world reload
         worldRoot = server.getWorldPath(LevelResource.ROOT);
 
         // Clean up leftover recompressor temp files
@@ -331,36 +414,38 @@ public class LinearReader {
         savePins();  // belt-and-suspenders — savePinsEagerly() already keeps file current
         DHPregenMonitor.notifyServerStopping();
 
-        Set<LinearRegionFile> toFlush = new java.util.HashSet<>(flushQueue);
-        for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
-            if (region.isDirty()) toFlush.add(region);
-        }
         flushQueue.clear();
         queuedRegions.clear();
 
-        for (LinearRegionFile region : toFlush) {
-            if (inFlightFlushes.add(region)) {
-                flushExecutor.submit(() -> {
-                    try { region.flush(); }
-                    catch (IOException e) {
-                        LOGGER.error("[LinearReader] Shutdown flush failed for {}: {}",
-                                region, e.getMessage(), e);
-                    } finally {
-                        inFlightFlushes.remove(region);
-                    }
-                });
+        if (flushExecutor != null) {
+            flushExecutor.shutdownNow();
+        }
+        inFlightFlushes.clear();
+
+        try {
+            // Flush whatever is still dirty directly rather than waiting on the low-priority queue.
+            flushRegionsBlocking(dirtyRegionsSnapshot());
+        } catch (IOException e) {
+            LOGGER.error("[LinearReader] Shutdown blocking flush failed: {}", e.getMessage(), e);
+        }
+
+        if (flushExecutor != null) {
+            try {
+                if (!flushExecutor.awaitTermination(10, TimeUnit.SECONDS))
+                    LOGGER.warn("[LinearReader] Flush executor did not finish within 10s on shutdown.");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOGGER.warn("[LinearReader] Interrupted while waiting for flush executor on shutdown.");
             }
         }
 
-        flushExecutor.shutdown();
         try {
-            if (!flushExecutor.awaitTermination(60, TimeUnit.SECONDS))
-                LOGGER.warn("[LinearReader] Flush executor did not finish within 60s on shutdown.");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOGGER.warn("[LinearReader] Interrupted while waiting for flush executor on shutdown.");
+            flushRegionsBlocking(dirtyRegionsSnapshot());
+        } catch (IOException e) {
+            LOGGER.error("[LinearReader] Final shutdown flush failed: {}", e.getMessage(), e);
         }
 
+        LinearRegionFile.shutdownBackupExecutor();
         LOGGER.info("[LinearReader] Shutdown complete — all region flushes finished.");
     }
 
@@ -385,9 +470,44 @@ public class LinearReader {
         }
     }
 
+    private static List<LinearRegionFile> dirtyRegionsSnapshot() {
+        List<LinearRegionFile> dirty = new ArrayList<>();
+        for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+            if (region.isDirty()) dirty.add(region);
+        }
+        return dirty;
+    }
+
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        tickCounter++;
+        if (tickCounter % 20 == 0) {
+            long nowNs = System.nanoTime();
+            List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
+            for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+                if (region.shouldBackgroundFlush(nowNs)) {
+                    if (queuedRegions.add(region)) {
+                        flushQueue.add(region);
+                    }
+                    continue;
+                }
+                if (region.shouldPressureFlush(nowNs)) {
+                    dirtyCandidates.add(region);
+                }
+            }
+            int dirtyLimit = maxDirtyRegionsBeforePressureFlush();
+            if (dirtyCandidates.size() > dirtyLimit) {
+                // If the dirty set keeps growing, flush the stalest regions first to cap RAM usage.
+                dirtyCandidates.sort(java.util.Comparator.comparingLong(LinearRegionFile::lastMutationTimeNs));
+                int toQueue = dirtyCandidates.size() - dirtyLimit;
+                for (int i = 0; i < toQueue; i++) {
+                    LinearRegionFile region = dirtyCandidates.get(i);
+                    if (!queuedRegions.add(region)) continue;
+                    flushQueue.add(region);
+                }
+            }
+        }
         if (flushQueue.isEmpty()) return;
 
         int limit = DHPregenMonitor.effectiveRegionsPerSaveTick();
@@ -401,7 +521,7 @@ public class LinearReader {
             if (!inFlightFlushes.add(region)) continue;
             submitted++;
             flushExecutor.submit(() -> {
-                try { region.flush(); }
+                try { region.flush(false); }
                 catch (IOException e) {
                     LOGGER.error("[LinearReader] Async flush failed for {}: {}",
                             region, e.getMessage(), e);
