@@ -195,6 +195,18 @@ public class LinearReader implements ModInitializer {
 	private boolean dedicatedServer;
 	private int tickCounter;
 
+	private long serverStartNs;
+
+	private static final long INTEGRATED_FLUSH_STARTUP_GRACE_NS = 20_000_000_000L;
+	private static final long DEDICATED_FLUSH_STARTUP_GRACE_NS = 5_000_000_000L;
+
+	private boolean backgroundFlushesAllowed(long nowNs) {
+		long graceNs = dedicatedServer
+				? DEDICATED_FLUSH_STARTUP_GRACE_NS
+				: INTEGRATED_FLUSH_STARTUP_GRACE_NS;
+		return nowNs - serverStartNs >= graceNs;
+	}
+
 	private int maxDirtyRegionsBeforePressureFlush() {
 		return dedicatedServer ? 64 : 24;
 	}
@@ -203,6 +215,7 @@ public class LinearReader implements ModInitializer {
 		flushQueue.clear();
 		queuedRegions.clear();
 		tickCounter = 0;
+		serverStartNs = System.nanoTime();
 		inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
 		// Integrated servers share CPU with rendering, so keep background flushes gentler there.
 		final int threadCount = dedicatedServer ? 2 : 1;
@@ -436,28 +449,29 @@ public class LinearReader implements ModInitializer {
 		tickCounter++;
 		if (tickCounter % 20 == 0) {
 			long nowNs = System.nanoTime();
-			List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
-			for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
-				if (region.shouldBackgroundFlush(nowNs)) {
-					if (queuedRegions.add(region)) {
+			if (backgroundFlushesAllowed(nowNs)) {
+				List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
+				for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+					if (region.shouldBackgroundFlush(nowNs)) {
+						if (queuedRegions.add(region)) {
+							flushQueue.add(region);
+						}
+						continue;
+					}
+					if (region.shouldPressureFlush(nowNs)) {
+						dirtyCandidates.add(region);
+					}
+				}
+
+				int dirtyLimit = maxDirtyRegionsBeforePressureFlush();
+				if (dirtyCandidates.size() > dirtyLimit) {
+					dirtyCandidates.sort(java.util.Comparator.comparingLong(LinearRegionFile::lastMutationTimeNs));
+					int toQueue = dirtyCandidates.size() - dirtyLimit;
+					for (int i = 0; i < toQueue; i++) {
+						LinearRegionFile region = dirtyCandidates.get(i);
+						if (!queuedRegions.add(region)) continue;
 						flushQueue.add(region);
 					}
-					continue;
-				}
-				if (region.shouldPressureFlush(nowNs)) {
-					dirtyCandidates.add(region);
-				}
-			}
-
-			int dirtyLimit = maxDirtyRegionsBeforePressureFlush();
-			if (dirtyCandidates.size() > dirtyLimit) {
-				// If the dirty set keeps growing, flush the stalest regions first to cap RAM usage.
-				dirtyCandidates.sort(java.util.Comparator.comparingLong(LinearRegionFile::lastMutationTimeNs));
-				int toQueue = dirtyCandidates.size() - dirtyLimit;
-				for (int i = 0; i < toQueue; i++) {
-					LinearRegionFile region = dirtyCandidates.get(i);
-					if (!queuedRegions.add(region)) continue;
-					flushQueue.add(region);
 				}
 			}
 		}
