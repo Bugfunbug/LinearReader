@@ -62,8 +62,16 @@ public class LinearReader {
     /** World root path — set in onServerStarting, used by pin commands. */
     public static volatile Path worldRoot = null;
 
+    private static Path normalizeRegionPath(Path regionFilePath) {
+        return regionFilePath.toAbsolutePath().normalize();
+    }
+
     public static boolean isPinned(Path regionFilePath) {
-        return PINNED_PATHS.contains(regionFilePath.toAbsolutePath().normalize());
+        return isPinnedNormalized(normalizeRegionPath(regionFilePath));
+    }
+
+    public static boolean isPinnedNormalized(Path normalizedRegionFilePath) {
+        return PINNED_PATHS.contains(normalizedRegionFilePath);
     }
 
     /**
@@ -72,7 +80,7 @@ public class LinearReader {
      * async thread timeout crashing the JVM) does not lose pin data.
      */
     public static void pinRegion(Path regionFilePath) {
-        PINNED_PATHS.add(regionFilePath.toAbsolutePath().normalize());
+        PINNED_PATHS.add(normalizeRegionPath(regionFilePath));
         savePinsEagerly();
     }
 
@@ -81,7 +89,7 @@ public class LinearReader {
      * Saves the pins file immediately for the same reason as pinRegion().
      */
     public static void unpinRegion(Path regionFilePath) {
-        PINNED_PATHS.remove(regionFilePath.toAbsolutePath().normalize());
+        PINNED_PATHS.remove(normalizeRegionPath(regionFilePath));
         savePinsEagerly();
     }
 
@@ -206,7 +214,25 @@ public class LinearReader {
     private static final long DEDICATED_FLUSH_STARTUP_GRACE_NS = 5_000_000_000L;
 
     private int maxDirtyRegionsBeforePressureFlush() {
-        return dedicatedServer ? 64 : 24;
+        int minDirty = LinearConfig.getPressureFlushMinDirtyRegions();
+        int maxDirty = Math.max(minDirty, LinearConfig.getPressureFlushMaxDirtyRegions());
+        int flushRate = Math.max(1, DHPregenMonitor.effectiveRegionsPerSaveTick());
+        int cacheSize = Math.max(8, DHPregenMonitor.effectiveCacheSize());
+
+        int target = Math.max(cacheSize / 16, flushRate * 2);
+        if (!dedicatedServer) {
+            target = Math.max(minDirty, target / 2);
+        }
+        if (DHPregenMonitor.isPregenActive()) {
+            target = Math.min(target, Math.max(minDirty, 4));
+        }
+
+        int backlog = flushQueue.size() + inFlightFlushes.size();
+        if (backlog >= Math.max(2, flushRate)) {
+            target = Math.max(minDirty, target / 2);
+        }
+
+        return Math.max(minDirty, Math.min(maxDirty, target));
     }
 
     private boolean backgroundFlushesAllowed(long nowNs) {
@@ -280,7 +306,6 @@ public class LinearReader {
         INSTANCE = this;
 
         DHPregenMonitor.install();
-        IdleRecompressor.startAutoDetector();
 
         LOGGER.info("[LinearReader] Initialized — using .linear format exclusively.");
     }
@@ -337,7 +362,6 @@ public class LinearReader {
             // make relativize() throw IllegalArgumentException unexpectedly.
             Path normalizedRoot = worldRoot.toAbsolutePath().normalize();
             List<String> lines = PINNED_PATHS.stream()
-                    .map(p -> p.toAbsolutePath().normalize())
                     .filter(p -> p.startsWith(normalizedRoot))
                     .map(p -> normalizedRoot.relativize(p).toString().replace('\\', '/'))
                     .sorted()
@@ -366,53 +390,52 @@ public class LinearReader {
         dedicatedServer = server.isDedicatedServer();
         initExecutor();  // recreate executor — handles singleplayer world reload
         worldRoot = server.getWorldPath(LevelResource.ROOT);
-
-        // Clean up leftover recompressor temp files
-        try (Stream<Path> stream = Files.walk(worldRoot)) {
-            stream.filter(p -> p.getFileName().toString().endsWith(".recompress.wip"))
-                    .forEach(p -> { try { Files.delete(p); } catch (IOException ignored) {} });
-        } catch (IOException e) {
-            LOGGER.warn("[LinearReader] Could not clean recompress temp files: {}", e.getMessage());
-        }
+        IdleRecompressor.startAutoDetector();
 
         loadPins();
 
-        // .wip crash recovery
         int recovered = 0, deleted = 0;
         try (Stream<Path> stream = Files.walk(worldRoot)) {
-            Iterable<Path> wips = () -> stream
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().endsWith(".linear.wip"))
-                    .iterator();
-
-            for (Path wip : wips) {
-                String wipName  = wip.getFileName().toString();
-                String realName = wipName.substring(0, wipName.length() - 4);
-                Path   realPath = wip.resolveSibling(realName);
-
-                if (isValidLinearFile(wip)) {
+            Iterable<Path> paths = () -> stream.filter(Files::isRegularFile).iterator();
+            for (Path path : paths) {
+                String fileName = path.getFileName().toString();
+                if (fileName.endsWith(".recompress.wip")) {
                     try {
-                        Files.move(wip, realPath, StandardCopyOption.REPLACE_EXISTING);
+                        Files.delete(path);
+                    } catch (IOException e) {
+                        LOGGER.warn("[LinearReader] Could not clean recompress temp file {}: {}",
+                                fileName, e.getMessage());
+                    }
+                    continue;
+                }
+                if (!fileName.endsWith(".linear.wip")) continue;
+
+                String realName = fileName.substring(0, fileName.length() - 4);
+                Path realPath = path.resolveSibling(realName);
+
+                if (isValidLinearFile(path)) {
+                    try {
+                        Files.move(path, realPath, StandardCopyOption.REPLACE_EXISTING);
                         LOGGER.warn("[LinearReader] Recovered .wip file: {} -> {}",
-                                wipName, realName);
+                                fileName, realName);
                         recovered++;
                     } catch (IOException e) {
                         LOGGER.error("[LinearReader] Could not rename {} to {}: {}",
-                                wipName, realName, e.getMessage());
+                                fileName, realName, e.getMessage());
                     }
                 } else {
                     try {
-                        Files.delete(wip);
-                        LOGGER.warn("[LinearReader] Deleted incomplete .wip file: {}", wipName);
+                        Files.delete(path);
+                        LOGGER.warn("[LinearReader] Deleted incomplete .wip file: {}", fileName);
                         deleted++;
                     } catch (IOException e) {
                         LOGGER.error("[LinearReader] Could not delete {}: {}",
-                                wipName, e.getMessage());
+                                fileName, e.getMessage());
                     }
                 }
             }
         } catch (IOException e) {
-            LOGGER.error("[LinearReader] Error scanning for .wip files: {}", e.getMessage(), e);
+            LOGGER.error("[LinearReader] Error scanning startup temp files: {}", e.getMessage(), e);
         }
 
         if (recovered > 0 || deleted > 0)
@@ -430,9 +453,8 @@ public class LinearReader {
         queuedRegions.clear();
 
         if (flushExecutor != null) {
-            flushExecutor.shutdownNow();
+            flushExecutor.shutdown();
         }
-        inFlightFlushes.clear();
 
         try {
             // Flush whatever is still dirty directly rather than waiting on the low-priority queue.
@@ -450,6 +472,7 @@ public class LinearReader {
                 LOGGER.warn("[LinearReader] Interrupted while waiting for flush executor on shutdown.");
             }
         }
+        inFlightFlushes.clear();
 
         try {
             flushRegionsBlocking(dirtyRegionsSnapshot());

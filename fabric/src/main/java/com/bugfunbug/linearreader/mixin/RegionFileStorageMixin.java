@@ -82,7 +82,7 @@ public abstract class RegionFileStorageMixin {
                 LinearRegionFile candidate = linearCache.get(k);
                 // Never evict a region whose latest state is still only in memory.
                 if (candidate != null
-                        && !LinearReader.isPinned(candidate.getPath())
+                        && !LinearReader.isPinnedNormalized(candidate.getNormalizedPath())
                         && candidate.canEvictFromCache()) {
                     evictKey = k;
                 }
@@ -232,6 +232,7 @@ public abstract class RegionFileStorageMixin {
      */
     @Overwrite
     public void scanChunk(ChunkPos pos, StreamTagVisitor visitor) throws IOException {
+        IdleRecompressor.notifyIO();
         LinearRegionFile region = linearGetOrCreate(pos, true);
         if (region == null) return;
         try (DataInputStream dis = region.read(pos)) {

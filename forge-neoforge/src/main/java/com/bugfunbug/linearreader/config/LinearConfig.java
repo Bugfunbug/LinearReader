@@ -23,6 +23,8 @@ public final class LinearConfig {
     private static volatile boolean backupEnabled        = true;
     private static volatile int     backupUpdateInterval = 10;
     private static volatile int     regionsPerSaveTick   = 4;
+    private static volatile int     pressureFlushMinDirtyRegions = 4;
+    private static volatile int     pressureFlushMaxDirtyRegions = 16;
     private static volatile int     slowIoThresholdMs    = 500;
     private static volatile int     diskSpaceWarnGb      = 1;
 
@@ -35,6 +37,8 @@ public final class LinearConfig {
     public static boolean isBackupEnabled()         { return backupEnabled; }
     public static int     getBackupUpdateInterval() { return backupUpdateInterval; }
     public static int     getRegionsPerSaveTick()   { return regionsPerSaveTick; }
+    public static int     getPressureFlushMinDirtyRegions() { return pressureFlushMinDirtyRegions; }
+    public static int     getPressureFlushMaxDirtyRegions() { return pressureFlushMaxDirtyRegions; }
     public static int     getSlowIoThresholdMs()    { return slowIoThresholdMs; }
     public static int     getDiskSpaceWarnGb()      { return diskSpaceWarnGb; }
 
@@ -48,6 +52,8 @@ public final class LinearConfig {
             boolean backupEnabled,
             int     backupUpdateInterval,
             int     regionsPerSaveTick,
+            int     pressureFlushMinDirtyRegions,
+            int     pressureFlushMaxDirtyRegions,
             int     slowIoThresholdMs,
             int     diskSpaceWarnGb) {
 
@@ -56,6 +62,9 @@ public final class LinearConfig {
         LinearConfig.backupEnabled        = backupEnabled;
         LinearConfig.backupUpdateInterval = backupUpdateInterval;
         LinearConfig.regionsPerSaveTick   = regionsPerSaveTick;
+        LinearConfig.pressureFlushMinDirtyRegions = pressureFlushMinDirtyRegions;
+        LinearConfig.pressureFlushMaxDirtyRegions = Math.max(
+                pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);
         LinearConfig.slowIoThresholdMs    = slowIoThresholdMs;
         LinearConfig.diskSpaceWarnGb      = diskSpaceWarnGb;
     }

@@ -29,6 +29,12 @@ public class FabricLinearConfig implements ConfigData {
     /** Max dirty regions submitted to the flush executor per server tick. */
     public int regionsPerSaveTick = 4;
 
+    /** Lower guardrail for the dynamic pressure-flush dirty-region target. */
+    public int pressureFlushMinDirtyRegions = 4;
+
+    /** Upper guardrail for the dynamic pressure-flush dirty-region target. */
+    public int pressureFlushMaxDirtyRegions = 16;
+
     /** Warn if a region read/write exceeds this many ms. -1 = disabled. */
     public int slowIoThresholdMs = 500;
 
@@ -41,6 +47,9 @@ public class FabricLinearConfig implements ConfigData {
         regionCacheSize      = clamp(regionCacheSize,      8,  1024);
         backupUpdateInterval = clamp(backupUpdateInterval, 1,  100);
         regionsPerSaveTick   = clamp(regionsPerSaveTick,   1,  64);
+        pressureFlushMinDirtyRegions = clamp(pressureFlushMinDirtyRegions, 1, 64);
+        pressureFlushMaxDirtyRegions = clamp(pressureFlushMaxDirtyRegions, 1, 128);
+        pressureFlushMaxDirtyRegions = Math.max(pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);
         slowIoThresholdMs    = Math.max(-1, slowIoThresholdMs);
         diskSpaceWarnGb      = Math.max(-1, diskSpaceWarnGb);
     }

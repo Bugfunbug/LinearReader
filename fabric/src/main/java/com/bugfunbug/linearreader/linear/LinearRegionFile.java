@@ -60,7 +60,7 @@ public class LinearRegionFile {
     // Reusable byte-array buffers per flush thread — dramatically reduces GC pressure
     // under heavy worldgen where flushes happen constantly.
     private static final ThreadLocal<byte[][]> TL_FLUSH_BUFS =
-            ThreadLocal.withInitial(() -> new byte[2][]);
+            ThreadLocal.withInitial(() -> new byte[3][]);
 
     // Throttle the disk-space syscall to at most once per minute per flush thread.
     private static final ThreadLocal<Long> TL_LAST_DISK_CHECK =
@@ -81,6 +81,7 @@ public class LinearRegionFile {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     private final Path    path;
+    private final Path    normalizedPath;
     private final boolean dsync;
 
     public final int regionX;
@@ -125,6 +126,7 @@ public class LinearRegionFile {
 
     public LinearRegionFile(Path path, boolean dsync) throws IOException {
         this.path  = path;
+        this.normalizedPath = path.toAbsolutePath().normalize();
         this.dsync = dsync;
 
         String[] parts = path.getFileName().toString().split("\\.");
@@ -237,13 +239,13 @@ public class LinearRegionFile {
     }
 
     private boolean isResidentTrimCandidate() {
-        return loaded && !dirty && !flushing && !LinearReader.isPinned(path);
+        return loaded && !dirty && !flushing && !LinearReader.isPinnedNormalized(normalizedPath);
     }
 
     private long releaseResidentDataIfPossible() {
         lock.writeLock().lock();
         try {
-            if (!loaded || dirty || flushing || LinearReader.isPinned(path)) return 0L;
+            if (!loaded || dirty || flushing || LinearReader.isPinnedNormalized(normalizedPath)) return 0L;
             long freed = residentBytesEstimate();
             Arrays.fill(chunkData, null);
             Arrays.fill(chunkSizes, 0);
@@ -545,8 +547,10 @@ public class LinearRegionFile {
         return totalDataBytes;
     }
 
-    public Path    getPath()  { return path; }
-    public boolean isDirty()  { return dirty; }
+    public Path    getPath()           { return path; }
+    public Path    getNormalizedPath() { return normalizedPath; }
+    public boolean isDirty()           { return dirty; }
+    public boolean isFlushing()        { return flushing; }
 
     @Override
     public String toString() {
@@ -803,8 +807,11 @@ public class LinearRegionFile {
         crc.update(compressedBuf, 0, (int) compLen);
         long checksum = crc.getValue();
 
-        byte[]     out    = new byte[32 + (int) compLen + 8];
-        ByteBuffer outBuf = ByteBuffer.wrap(out);
+        int outLen = 32 + (int) compLen + 8;
+        if (bufs[2] == null || bufs[2].length < outLen)
+            bufs[2] = new byte[outLen];
+        byte[] out = bufs[2];
+        ByteBuffer outBuf = ByteBuffer.wrap(out, 0, outLen);
         outBuf.putLong(LINEAR_SIGNATURE);
         outBuf.put(LINEAR_VERSION);
         outBuf.putLong(newestTsSnap);
@@ -816,10 +823,9 @@ public class LinearRegionFile {
         outBuf.putLong(LINEAR_SIGNATURE);
 
         Path wip = path.resolveSibling(path.getFileName() + ".wip");
-        Files.write(wip, out);
-
-        if (dsync) {
-            try (FileOutputStream fos = new FileOutputStream(wip.toFile(), true)) {
+        try (FileOutputStream fos = new FileOutputStream(wip.toFile())) {
+            fos.write(out, 0, outLen);
+            if (dsync) {
                 fos.getFD().sync();
             }
         }

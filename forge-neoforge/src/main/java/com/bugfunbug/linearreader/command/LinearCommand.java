@@ -328,13 +328,29 @@ public class LinearCommand {
             status = "§a[LinearReader] Recompression running (" + mode + "). " +
                     "Scanned: §f" + IdleRecompressor.filesScanned() +
                     "§a  Upgraded: §f" + IdleRecompressor.filesRecompressed() +
+                    "§a  Already 22: §f" + IdleRecompressor.filesAlreadyOptimal() +
+                    "§a  Skipped: §f" + IdleRecompressor.filesUnstableSkipped() +
                     "§a  Saved: §f" + fmtSize(IdleRecompressor.bytesSaved());
         } else {
-            status = "§7[LinearReader] Recompression idle. " +
+            long idleRemainingMs = IdleRecompressor.idleRemainingMs();
+            String autoStatus = idleRemainingMs == 0L
+                    ? "§aauto ready to start"
+                    : "§7auto in §f" + fmtDuration(idleRemainingMs);
+            status = "§7[LinearReader] Recompression idle (" + autoStatus + "§7). " +
                     "Use '§flinearreader afk-compress start§7' to run manually.";
         }
         ctx.getSource().sendSuccess(() -> Component.literal(status), false);
         return 1;
+    }
+
+    private static String fmtDuration(long millis) {
+        long totalSeconds = Math.max(0L, millis / 1000L);
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+        if (hours > 0) return hours + "h " + minutes + "m";
+        if (minutes > 0) return minutes + "m " + seconds + "s";
+        return seconds + "s";
     }
 
     private static int executeAfkCompressStart(CommandContext<CommandSourceStack> ctx) {

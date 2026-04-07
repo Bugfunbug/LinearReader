@@ -25,8 +25,9 @@ import java.util.zip.CRC32;
  * cleaned up by LinearReader.onServerStarting() — they are never promoted
  * because they use a distinct extension, unlike live .linear.wip files.
  *
- * Files currently in LinearRegionFile.ALL_OPEN are always skipped — they may
- * receive dirty writes at any moment. The recompressor re-checks open state
+ * Only unstable open files are skipped — regions that are dirty or currently
+ * flushing may change on disk at any moment. Clean cached regions remain
+ * eligible for recompression. The recompressor re-checks region stability
  * immediately before writing to close the window between scan and write.
  */
 public final class IdleRecompressor {
@@ -50,12 +51,26 @@ public final class IdleRecompressor {
     private static final AtomicLong    LAST_IO_MS = new AtomicLong(System.currentTimeMillis());
     private static final AtomicBoolean RUNNING    = new AtomicBoolean(false);
     private static final AtomicBoolean IS_MANUAL  = new AtomicBoolean(false);
+    private static volatile Thread     DETECTOR   = null;
     private static volatile Thread     WORKER     = null;
 
     // Stats - reset at the start of each new run.
     private static final AtomicInteger FILES_SCANNED      = new AtomicInteger(0);
     private static final AtomicInteger FILES_RECOMPRESSED = new AtomicInteger(0);
+    private static final AtomicInteger FILES_ALREADY_OPTIMAL = new AtomicInteger(0);
+    private static final AtomicInteger FILES_UNSTABLE_SKIPPED = new AtomicInteger(0);
+    private static final AtomicInteger FILES_NO_SIZE_GAIN = new AtomicInteger(0);
+    private static final AtomicInteger FILES_FAILED = new AtomicInteger(0);
     private static final AtomicLong    BYTES_SAVED        = new AtomicLong(0);
+
+    private enum RecompressOutcome {
+        UPGRADED,
+        ALREADY_OPTIMAL,
+        UNSTABLE_SKIPPED,
+        NO_SIZE_GAIN
+    }
+
+    private record RecompressResult(RecompressOutcome outcome, long bytesSaved) {}
 
     // -------------------------------------------------------------------------
     // Called from RegionFileStorageMixin
@@ -63,7 +78,7 @@ public final class IdleRecompressor {
 
     public static void registerFolder(Path folder) {
         if (folder == null) return;
-        KNOWN_FOLDERS.add(folder.toAbsolutePath());
+        KNOWN_FOLDERS.add(folder.toAbsolutePath().normalize());
     }
 
     /**
@@ -84,6 +99,10 @@ public final class IdleRecompressor {
 
     /** Starts the daemon thread that watches for idleness. Call once at mod init. */
     public static void startAutoDetector() {
+        LAST_IO_MS.set(System.currentTimeMillis());
+        Thread existing = DETECTOR;
+        if (existing != null && existing.isAlive()) return;
+
         Thread t = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
@@ -100,18 +119,17 @@ public final class IdleRecompressor {
                     startWorker(false);
                 }
             }
+            DETECTOR = null;
         }, "lr-idle-detector");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY + 1);
+        DETECTOR = t;
         t.start();
     }
 
     /** Returns false if already running. */
     public static boolean startManual() {
         if (RUNNING.get()) return false;
-        FILES_SCANNED.set(0);
-        FILES_RECOMPRESSED.set(0);
-        BYTES_SAVED.set(0);
         startWorker(true);
         return true;
     }
@@ -122,6 +140,8 @@ public final class IdleRecompressor {
     }
 
     public static void shutdown() {
+        Thread detector = DETECTOR;
+        if (detector != null) detector.interrupt();
         interruptWorker();
     }
 
@@ -129,6 +149,13 @@ public final class IdleRecompressor {
     public static boolean isManual()          { return IS_MANUAL.get(); }
     public static int     filesScanned()      { return FILES_SCANNED.get(); }
     public static int     filesRecompressed() { return FILES_RECOMPRESSED.get(); }
+    public static int     filesAlreadyOptimal() { return FILES_ALREADY_OPTIMAL.get(); }
+    public static int     filesUnstableSkipped() { return FILES_UNSTABLE_SKIPPED.get(); }
+    public static long    idleThresholdMs()   { return IDLE_THRESHOLD_MS; }
+    public static long    idleRemainingMs() {
+        long remaining = IDLE_THRESHOLD_MS - (System.currentTimeMillis() - LAST_IO_MS.get());
+        return Math.max(0L, remaining);
+    }
     public static long    bytesSaved()        { return BYTES_SAVED.get(); }
 
     // -------------------------------------------------------------------------
@@ -137,6 +164,7 @@ public final class IdleRecompressor {
 
     private static void startWorker(boolean manual) {
         if (!RUNNING.compareAndSet(false, true)) return;
+        resetStats();
         IS_MANUAL.set(manual);
         Thread t = new Thread(() -> {
             try {
@@ -145,23 +173,50 @@ public final class IdleRecompressor {
                 RUNNING.set(false);
                 IS_MANUAL.set(false);
                 WORKER = null;
-                int recomp = FILES_RECOMPRESSED.get();
-                int total  = FILES_SCANNED.get();
-                if (recomp > 0) {
-                    LinearReader.LOGGER.info(
-                            "[LinearReader] Recompression done: {}/{} file(s) upgraded, {} bytes saved.",
-                            recomp, total, BYTES_SAVED.get());
-                } else if (total > 0) {
-                    LinearReader.LOGGER.info(
-                            "[LinearReader] Recompression done: all {} file(s) already at level {}.",
-                            total, TARGET_LEVEL);
-                }
+                logCompletion();
             }
         }, "lr-recompressor");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY + 1);
         WORKER = t;
         t.start();
+    }
+
+    private static void resetStats() {
+        FILES_SCANNED.set(0);
+        FILES_RECOMPRESSED.set(0);
+        FILES_ALREADY_OPTIMAL.set(0);
+        FILES_UNSTABLE_SKIPPED.set(0);
+        FILES_NO_SIZE_GAIN.set(0);
+        FILES_FAILED.set(0);
+        BYTES_SAVED.set(0);
+    }
+
+    private static void logCompletion() {
+        int total = FILES_SCANNED.get();
+        if (total == 0) {
+            LinearReader.LOGGER.info("[LinearReader] Recompression done: no .linear files found.");
+            return;
+        }
+
+        StringBuilder msg = new StringBuilder("[LinearReader] Recompression done: ")
+                .append(FILES_RECOMPRESSED.get()).append(" upgraded, ")
+                .append(FILES_ALREADY_OPTIMAL.get()).append(" already at level ")
+                .append(TARGET_LEVEL).append(", ")
+                .append(FILES_UNSTABLE_SKIPPED.get()).append(" skipped (dirty/flushing)");
+
+        int noGain = FILES_NO_SIZE_GAIN.get();
+        if (noGain > 0) {
+            msg.append(", ").append(noGain).append(" no size gain");
+        }
+
+        int failed = FILES_FAILED.get();
+        if (failed > 0) {
+            msg.append(", ").append(failed).append(" failed");
+        }
+
+        msg.append(", ").append(BYTES_SAVED.get()).append(" bytes saved.");
+        LinearReader.LOGGER.info(msg.toString());
     }
 
     private static void interruptWorker() {
@@ -187,22 +242,31 @@ public final class IdleRecompressor {
 
             for (Path p : files) {
                 if (Thread.currentThread().isInterrupted()) return;
-                if (isOpen(p)) continue;
-
                 FILES_SCANNED.incrementAndGet();
                 try {
-                    long saved = recompressFile(p);
-                    if (saved > 0) {
-                        BYTES_SAVED.addAndGet(saved);
-                        FILES_RECOMPRESSED.incrementAndGet();
-                        LinearReader.LOGGER.debug(
-                                "[LinearReader] Recompressed {} - saved {} bytes.", p.getFileName(), saved);
+                    RecompressResult result = recompressFile(p);
+                    switch (result.outcome()) {
+                        case UPGRADED -> {
+                            BYTES_SAVED.addAndGet(result.bytesSaved());
+                            FILES_RECOMPRESSED.incrementAndGet();
+                        }
+                        case ALREADY_OPTIMAL -> FILES_ALREADY_OPTIMAL.incrementAndGet();
+                        case UNSTABLE_SKIPPED -> FILES_UNSTABLE_SKIPPED.incrementAndGet();
+                        case NO_SIZE_GAIN -> FILES_NO_SIZE_GAIN.incrementAndGet();
                     }
-                    Thread.sleep(FILE_DELAY_MS);
+                    if (result.outcome() == RecompressOutcome.UPGRADED) {
+                        LinearReader.LOGGER.debug(
+                                "[LinearReader] Recompressed {} - saved {} bytes.",
+                                p.getFileName(), result.bytesSaved());
+                    }
+                    if (result.outcome() != RecompressOutcome.UNSTABLE_SKIPPED) {
+                        Thread.sleep(FILE_DELAY_MS);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 } catch (IOException e) {
+                    FILES_FAILED.incrementAndGet();
                     LinearReader.LOGGER.warn("[LinearReader] Recompression failed for {}: {}",
                             p.getFileName(), e.getMessage());
                 }
@@ -210,10 +274,12 @@ public final class IdleRecompressor {
         }
     }
 
-    private static boolean isOpen(Path path) {
-        Path abs = path.toAbsolutePath();
+    private static boolean isRegionUnstable(Path path) {
+        Path abs = path.toAbsolutePath().normalize();
         for (LinearRegionFile r : LinearRegionFile.ALL_OPEN) {
-            if (r.getPath().toAbsolutePath().equals(abs)) return true;
+            if (r.getNormalizedPath().equals(abs)) {
+                return r.isDirty() || r.isFlushing();
+            }
         }
         return false;
     }
@@ -227,16 +293,26 @@ public final class IdleRecompressor {
      * Returns bytes saved, or 0 if the file was already at/above target level
      * or if recompression would make it larger.
      */
-    static long recompressFile(Path path) throws IOException {
+    static RecompressResult recompressFile(Path path) throws IOException {
+        if (isRegionUnstable(path)) {
+            return new RecompressResult(RecompressOutcome.UNSTABLE_SKIPPED, 0L);
+        }
+
         // Read only the outer header (32 bytes) to check compression level.
         // Avoids reading the entire file for the common case of already-maxed files.
         byte[] header = new byte[32];
         try (java.io.InputStream in = Files.newInputStream(path)) {
-            if (in.read(header) < 32) return 0;
+            if (in.read(header) < 32) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
         }
         ByteBuffer hdr = ByteBuffer.wrap(header);
-        if (hdr.getLong(0) != LINEAR_SIGNATURE) return 0;
-        if ((header[17] & 0xFF) >= TARGET_LEVEL) return 0; // already at or above target level
+        if (hdr.getLong(0) != LINEAR_SIGNATURE) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
+        if ((header[17] & 0xFF) >= TARGET_LEVEL) {
+            return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
+        }
 
         // Full recompression needed — now read the whole file.
         return recompressFileTo(path, path, TARGET_LEVEL);
@@ -245,15 +321,19 @@ public final class IdleRecompressor {
     /**
      * Reads {@code src}, recompresses at {@code targetLevel}, writes atomically to {@code dst}.
      * {@code src} and {@code dst} may be the same path (in-place).
-     * Returns bytes saved (0 if nothing was written — file already optimal or got larger).
+     * Returns the outcome and bytes saved.
      */
-    static long recompressFileTo(Path src, Path dst, int targetLevel) throws IOException {
+    static RecompressResult recompressFileTo(Path src, Path dst, int targetLevel) throws IOException {
         byte[] raw = Files.readAllBytes(src);
-        if (raw.length < 40) return 0;
+        if (raw.length < 40) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         ByteBuffer hdr = ByteBuffer.wrap(raw);
-        if (hdr.getLong(0)                                       != LINEAR_SIGNATURE) return 0;
-        if (ByteBuffer.wrap(raw, raw.length - 8, 8).getLong()   != LINEAR_SIGNATURE) return 0;
+        if (hdr.getLong(0) != LINEAR_SIGNATURE) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
+        if (ByteBuffer.wrap(raw, raw.length - 8, 8).getLong() != LINEAR_SIGNATURE) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
 
         byte  version    = raw[8];
         long  newestTs   = hdr.getLong(9);
@@ -261,29 +341,35 @@ public final class IdleRecompressor {
         short chunkCount = hdr.getShort(18);
 
         // For in-place recompression, skip if already at or above target.
-        if (src.equals(dst) && (curLevel & 0xFF) >= targetLevel) return 0;
+        if (src.equals(dst) && (curLevel & 0xFF) >= targetLevel) {
+            return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
+        }
 
         int compBodyLen = raw.length - 40; // 32-byte header + 8-byte footer
-        if (compBodyLen <= 0) return 0;
+        if (compBodyLen <= 0) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Decompress.
         byte[] existingComp = new byte[compBodyLen];
         System.arraycopy(raw, 32, existingComp, 0, compBodyLen);
 
         long expectedDecomp = Zstd.decompressedSize(existingComp);
-        if (expectedDecomp <= 0 || expectedDecomp > Integer.MAX_VALUE) return 0;
+        if (expectedDecomp <= 0 || expectedDecomp > Integer.MAX_VALUE) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
 
         byte[] body = new byte[(int) expectedDecomp];
         long result = Zstd.decompress(body, existingComp);
-        if (Zstd.isError(result)) return 0;
+        if (Zstd.isError(result)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Recompress at target level.
         byte[] newComp = new byte[(int) Zstd.compressBound(body.length)];
         long   newLen  = Zstd.compress(newComp, body, targetLevel);
-        if (Zstd.isError(newLen)) return 0;
+        if (Zstd.isError(newLen)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // For in-place: don't write if it got larger (can happen with already-optimal data).
-        if (src.equals(dst) && newLen >= compBodyLen) return 0;
+        if (src.equals(dst) && newLen >= compBodyLen) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
 
         CRC32 crc32 = new CRC32();
         crc32.update(newComp, 0, (int) newLen);
@@ -300,9 +386,11 @@ public final class IdleRecompressor {
         outBuf.put(newComp, 0, (int) newLen);
         outBuf.putLong(LINEAR_SIGNATURE);
 
-        // Only abort in-place recompression if the region is open.
+        // Only abort in-place recompression if the region is currently unstable.
         // Backup creation (src != dst) is always safe to proceed.
-        if (src.toAbsolutePath().equals(dst.toAbsolutePath()) && isOpen(src)) return 0;
+        if (src.toAbsolutePath().normalize().equals(dst.toAbsolutePath().normalize()) && isRegionUnstable(src)) {
+            return new RecompressResult(RecompressOutcome.UNSTABLE_SKIPPED, 0L);
+        }
 
         // Atomic rename. Use .recompress.wip so startup recovery ignores/deletes it
         // rather than treating it as a live .linear.wip to promote.
@@ -315,6 +403,6 @@ public final class IdleRecompressor {
             Files.move(wip, dst, StandardCopyOption.REPLACE_EXISTING);
         }
 
-        return compBodyLen - (long) newLen;
+        return new RecompressResult(RecompressOutcome.UPGRADED, compBodyLen - (long) newLen);
     }
 }

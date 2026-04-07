@@ -20,6 +20,8 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.BooleanValue BACKUP_ENABLED;
     private static final ForgeConfigSpec.IntValue     BACKUP_UPDATE_INTERVAL;
     private static final ForgeConfigSpec.IntValue     REGIONS_PER_SAVE_TICK;
+    private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MIN_DIRTY_REGIONS;
+    private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MAX_DIRTY_REGIONS;
     private static final ForgeConfigSpec.IntValue     SLOW_IO_THRESHOLD_MS;
     private static final ForgeConfigSpec.IntValue     DISK_SPACE_WARN_GB;
 
@@ -68,6 +70,22 @@ public final class ForgeLinearConfig {
                 )
                 .defineInRange("regionsPerSaveTick", 4, 1, 64);
 
+        PRESSURE_FLUSH_MIN_DIRTY_REGIONS = builder
+                .comment(
+                        "Lower guardrail for the dynamic pressure-flush dirty-region target.",
+                        "Smaller = more aggressive background draining under pressure.",
+                        "Default = 4"
+                )
+                .defineInRange("pressureFlushMinDirtyRegions", 4, 1, 64);
+
+        PRESSURE_FLUSH_MAX_DIRTY_REGIONS = builder
+                .comment(
+                        "Upper guardrail for the dynamic pressure-flush dirty-region target.",
+                        "Larger = more backlog allowed before pressure flushing ramps up.",
+                        "Default = 16"
+                )
+                .defineInRange("pressureFlushMaxDirtyRegions", 16, 1, 128);
+
         SLOW_IO_THRESHOLD_MS = builder
                 .comment(
                         "Warn in the log if reading or writing a region takes longer than",
@@ -93,12 +111,16 @@ public final class ForgeLinearConfig {
      * handlers in LinearReader so values stay current across /reload.
      */
     public static void pushToLinearConfig() {
+        int pressureFlushMin = PRESSURE_FLUSH_MIN_DIRTY_REGIONS.get();
+        int pressureFlushMax = Math.max(pressureFlushMin, PRESSURE_FLUSH_MAX_DIRTY_REGIONS.get());
         LinearConfig.update(
                 COMPRESSION_LEVEL.get(),
                 REGION_CACHE_SIZE.get(),
                 BACKUP_ENABLED.get(),
                 BACKUP_UPDATE_INTERVAL.get(),
                 REGIONS_PER_SAVE_TICK.get(),
+                pressureFlushMin,
+                pressureFlushMax,
                 SLOW_IO_THRESHOLD_MS.get(),
                 DISK_SPACE_WARN_GB.get()
         );
