@@ -212,6 +212,7 @@ public class LinearReader {
 
     private static final long INTEGRATED_FLUSH_STARTUP_GRACE_NS = 20_000_000_000L;
     private static final long DEDICATED_FLUSH_STARTUP_GRACE_NS = 5_000_000_000L;
+    private static final long INTEGRATED_BACKGROUND_FLUSH_EXTRA_IDLE_NS = 60_000_000_000L;
 
     private int maxDirtyRegionsBeforePressureFlush() {
         int minDirty = LinearConfig.getPressureFlushMinDirtyRegions();
@@ -234,6 +235,13 @@ public class LinearReader {
         }
 
         return Math.max(minDirty, Math.min(maxDirty, target));
+    }
+
+    private boolean shouldQueueBackgroundFlush(LinearRegionFile region, long nowNs) {
+        if (!region.shouldBackgroundFlush(nowNs)) return false;
+        if (dedicatedServer) return true;
+        if (!flushQueue.isEmpty() || !inFlightFlushes.isEmpty()) return false;
+        return nowNs - region.lastMutationTimeNs() >= INTEGRATED_BACKGROUND_FLUSH_EXTRA_IDLE_NS;
     }
 
     private boolean backgroundFlushesAllowed(long nowNs) {
@@ -523,7 +531,7 @@ public class LinearReader {
             if (backgroundFlushesAllowed(nowNs)) {
                 List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
                 for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
-                    if (region.shouldBackgroundFlush(nowNs)) {
+                    if (shouldQueueBackgroundFlush(region, nowNs)) {
                         if (queuedRegions.add(region)) {
                             flushQueue.add(region);
                         }

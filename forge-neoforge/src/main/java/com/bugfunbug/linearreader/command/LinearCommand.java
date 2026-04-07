@@ -257,12 +257,18 @@ public class LinearCommand {
         long rFlushes = s.regionFlushes.sum();
         long cHits    = s.cacheHits.sum();
         long cMisses  = s.cacheMisses.sum();
+        long wHits    = s.wrapperCacheHits.sum();
+        long wMisses  = s.wrapperCacheMisses.sum();
+        long reloads  = s.residentReloads.sum();
+        long evictions = s.residentEvictions.sum();
         long cTotal   = cHits + cMisses;
+        long wTotal   = wHits + wMisses;
         long uncomp   = s.bytesUncompressed.sum();
         long comp     = s.bytesCompressed.sum();
 
         double uptime = LinearStats.uptimeSeconds();
         double hitPct = cTotal == 0 ? 0.0 : cHits * 100.0 / cTotal;
+        double wrapperHitPct = wTotal == 0 ? 0.0 : wHits * 100.0 / wTotal;
 
         // throughput (ops per second over the measurement window)
         double readTps  = uptime > 0 ? cReads  / uptime : 0;
@@ -295,9 +301,14 @@ public class LinearCommand {
                 + "  §7Compressed: §f" + fmtSize(comp)
                 + "  §7Saved: §a" + String.format("%.1f%%", LinearStats.compressionPct(uncomp, comp)) + "\n"
                 + "§7§l  \u2500\u2500 Region Cache \u2500\u2500§r\n"
-                + "§7  Hits: §f" + cHits
-                + "  §7Misses: §f" + cMisses
+                + "§7  Linear: §f" + cHits
+                + "§7/§f" + cMisses
                 + "  §7Rate: §f" + String.format("%.1f%%", hitPct) + "\n"
+                + "§7  Wrapper: §f" + wHits
+                + "§7/§f" + wMisses
+                + "  §7Rate: §f" + String.format("%.1f%%", wrapperHitPct) + "\n"
+                + "§7  Resident reloads: §f" + reloads
+                + "  §7Evictions: §f" + evictions + "\n"
                 + "§8  Tip: /linearreader bench reset to start a fresh window.";
 
         ctx.getSource().sendSuccess(() -> Component.literal(msg), false);

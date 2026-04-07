@@ -20,6 +20,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32;
 
@@ -72,6 +73,12 @@ public class LinearRegionFile {
      * balloon into hundreds of megabytes or more and trigger full-GC stalls.
      */
     private static final long RESIDENT_BUDGET_BYTES = computeResidentBudgetBytes();
+    private static final long RESIDENT_TARGET_BYTES = Math.max(RESIDENT_BUDGET_BYTES * 3L / 4L, 64L * 1024L * 1024L);
+    private static final long MIN_HEAP_HEADROOM_BYTES = computeMinHeapHeadroomBytes();
+    private static final long RESIDENT_TRIM_RECENT_ACCESS_NS = 45_000_000_000L;
+    private static final long RESIDENT_TRIM_MIN_INTERVAL_NS = 2_000_000_000L;
+    private static final int  MIN_RESIDENT_HOT_SET = 24;
+    private static final AtomicLong LAST_RESIDENT_TRIM_NS = new AtomicLong(0L);
     // Background flushes should target regions that have actually gone quiet, not hot ones.
     private static final long QUIET_FLUSH_DELAY_NS = 15_000_000_000L;
     private static final long PRESSURE_FLUSH_MIN_AGE_NS = 3_000_000_000L;
@@ -153,6 +160,7 @@ public class LinearRegionFile {
     private void loadIfNeeded() throws IOException {
         if (loaded) return; // volatile read — no lock needed for the negative case
         boolean becameLoaded = false;
+        boolean reloadedFromDisk = false;
         lock.writeLock().lock();
         try {
             if (loaded) return; // double-check inside lock
@@ -165,6 +173,7 @@ public class LinearRegionFile {
                 } else if (DHPregenMonitor.isBackupEnabled()) {
                     backedUp = Files.exists(bakPath());
                 }
+                reloadedFromDisk = ok;
             }
             // Mark loaded regardless of whether the file existed — an absent file
             // means a brand-new region; we start empty and dirty=false.
@@ -174,6 +183,9 @@ public class LinearRegionFile {
             lock.writeLock().unlock();
         }
         if (becameLoaded) {
+            if (reloadedFromDisk) {
+                LinearStats.recordResidentReload();
+            }
             markAccessed();
             trimResidentDataCache(this);
         }
@@ -192,10 +204,21 @@ public class LinearRegionFile {
         if (maxHeap <= 0L || maxHeap == Long.MAX_VALUE) {
             return 256L * 1024L * 1024L;
         }
-        long budget = maxHeap / 6L;
-        long min = 64L * 1024L * 1024L;
-        long max = 384L * 1024L * 1024L;
+        long budget = maxHeap / 3L;
+        long min = 128L * 1024L * 1024L;
+        long max = 768L * 1024L * 1024L;
         return Math.max(min, Math.min(max, budget));
+    }
+
+    private static long computeMinHeapHeadroomBytes() {
+        long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap <= 0L || maxHeap == Long.MAX_VALUE) {
+            return 128L * 1024L * 1024L;
+        }
+        long headroom = maxHeap / 6L;
+        long min = 128L * 1024L * 1024L;
+        long max = 512L * 1024L * 1024L;
+        return Math.max(min, Math.min(max, headroom));
     }
 
     private static java.util.concurrent.ExecutorService createBackupExecutor() {
@@ -239,7 +262,11 @@ public class LinearRegionFile {
     }
 
     private boolean isResidentTrimCandidate() {
-        return loaded && !dirty && !flushing && !LinearReader.isPinnedNormalized(normalizedPath);
+        return loaded
+                && !dirty
+                && !flushing
+                && !LinearReader.isPinnedNormalized(normalizedPath)
+                && System.nanoTime() - lastAccessNs >= RESIDENT_TRIM_RECENT_ACCESS_NS;
     }
 
     private long releaseResidentDataIfPossible() {
@@ -257,6 +284,7 @@ public class LinearRegionFile {
             newestTimestamp = 0L;
             materializedBytes = 0L;
             loaded = false;
+            LinearStats.recordResidentEviction();
             return freed;
         } finally {
             lock.writeLock().unlock();
@@ -264,6 +292,18 @@ public class LinearRegionFile {
     }
 
     private static void trimResidentDataCache(@Nullable LinearRegionFile keep) {
+        long nowNs = System.nanoTime();
+        Runtime runtime = Runtime.getRuntime();
+        long maxHeap = runtime.maxMemory();
+        long usedHeap = runtime.totalMemory() - runtime.freeMemory();
+        long heapHeadroom = maxHeap > 0L && maxHeap != Long.MAX_VALUE
+                ? Math.max(0L, maxHeap - usedHeap)
+                : Long.MAX_VALUE;
+        boolean heapPressure = heapHeadroom < MIN_HEAP_HEADROOM_BYTES;
+        long lastTrimNs = LAST_RESIDENT_TRIM_NS.get();
+        if (!heapPressure && nowNs - lastTrimNs < RESIDENT_TRIM_MIN_INTERVAL_NS) return;
+        if (!heapPressure && !LAST_RESIDENT_TRIM_NS.compareAndSet(lastTrimNs, nowNs)) return;
+
         long residentBytes = 0L;
         List<LinearRegionFile> candidates = new ArrayList<>();
         for (LinearRegionFile region : ALL_OPEN) {
@@ -272,11 +312,14 @@ public class LinearRegionFile {
                 candidates.add(region);
             }
         }
-        if (residentBytes <= RESIDENT_BUDGET_BYTES) return;
+        if (!heapPressure && residentBytes <= RESIDENT_BUDGET_BYTES) return;
 
         candidates.sort(Comparator.comparingLong(region -> region.lastAccessNs));
-        for (LinearRegionFile candidate : candidates) {
-            if (residentBytes <= RESIDENT_BUDGET_BYTES) break;
+        int trimLimit = Math.max(0, candidates.size() - MIN_RESIDENT_HOT_SET);
+        for (int i = 0; i < trimLimit; i++) {
+            LinearRegionFile candidate = candidates.get(i);
+            if (nowNs - candidate.lastAccessNs < RESIDENT_TRIM_RECENT_ACCESS_NS) continue;
+            if (!heapPressure && residentBytes <= RESIDENT_TARGET_BYTES) break;
             residentBytes -= candidate.releaseResidentDataIfPossible();
         }
     }

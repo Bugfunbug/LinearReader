@@ -168,13 +168,15 @@ public abstract class RegionFileStorageMixin {
 
         RegionFile cached = regionCache.getAndMoveToFirst(key);
         if (cached != null) {
+            LinearStats.recordWrapperCacheHit();
             if (cached instanceof LinearBackedRegionFile) {
                 linearCache.getAndMoveToFirst(key);
             }
             return cached;
         }
+        LinearStats.recordWrapperCacheMiss();
 
-        if (regionCache.size() >= 256) {
+        if (regionCache.size() >= DHPregenMonitor.effectiveCacheSize()) {
             regionCache.removeLast().close();
         }
 
@@ -194,7 +196,12 @@ public abstract class RegionFileStorageMixin {
     public void flush() throws IOException {
         final List<LinearRegionFile> toFlush;
         synchronized (this) {
-            toFlush = new ArrayList<>(linearCache.values());
+            toFlush = new ArrayList<>();
+            for (LinearRegionFile region : linearCache.values()) {
+                if (region.isDirty()) {
+                    toFlush.add(region);
+                }
+            }
         }
         try {
             LinearReader.flushRegionsBlocking(toFlush);

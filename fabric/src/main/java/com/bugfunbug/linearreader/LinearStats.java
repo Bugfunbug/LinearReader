@@ -56,6 +56,10 @@ public final class LinearStats {
     // ------------------------------------------------------------------
     public final LongAdder cacheHits   = new LongAdder();
     public final LongAdder cacheMisses = new LongAdder();
+    public final LongAdder wrapperCacheHits   = new LongAdder();
+    public final LongAdder wrapperCacheMisses = new LongAdder();
+    public final LongAdder residentReloads    = new LongAdder();
+    public final LongAdder residentEvictions  = new LongAdder();
 
     // Wall-clock time of the last reset (or mod init).
     public volatile long resetTimeMs = System.currentTimeMillis();
@@ -102,6 +106,10 @@ public final class LinearStats {
 
     public static void recordCacheHit()  { INSTANCE.cacheHits.increment(); }
     public static void recordCacheMiss() { INSTANCE.cacheMisses.increment(); }
+    public static void recordWrapperCacheHit()  { INSTANCE.wrapperCacheHits.increment(); }
+    public static void recordWrapperCacheMiss() { INSTANCE.wrapperCacheMisses.increment(); }
+    public static void recordResidentReload()   { INSTANCE.residentReloads.increment(); }
+    public static void recordResidentEviction() { INSTANCE.residentEvictions.increment(); }
 
     // ------------------------------------------------------------------
     // Reset
@@ -126,6 +134,10 @@ public final class LinearStats {
 
         s.cacheHits.reset();
         s.cacheMisses.reset();
+        s.wrapperCacheHits.reset();
+        s.wrapperCacheMisses.reset();
+        s.residentReloads.reset();
+        s.residentEvictions.reset();
 
         s.resetTimeMs = System.currentTimeMillis();
     }

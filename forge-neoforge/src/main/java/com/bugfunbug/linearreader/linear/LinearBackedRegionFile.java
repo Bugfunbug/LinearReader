@@ -9,6 +9,7 @@ import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.util.zip.GZIPInputStream;
@@ -161,33 +162,33 @@ public final class LinearBackedRegionFile extends RegionFile {
         buf.position(5);
         buf.get(compressed);
 
-        byte[] raw = decompress(compressionType, compressed);
-
-        // Time the store so c2me writes appear in /linearreader bench like vanilla writes.
         long t = System.nanoTime();
         try (DataOutputStream dos = linear.write(pos)) {
-            dos.write(raw);
+            writeDecompressed(compressionType, compressed, dos);
         }
         LinearStats.recordChunkWrite(System.nanoTime() - t);
     }
 
     /**
-     * Decompresses {@code data} according to the MC chunk stream compression type.
+     * Streams {@code data} according to the MC chunk stream compression type.
      */
-    private static byte[] decompress(int type, byte[] data) throws IOException {
+    private static void writeDecompressed(int type, byte[] data, DataOutputStream out) throws IOException {
         switch (type) {
             case 1: { // GZip
-                try (GZIPInputStream gis = new GZIPInputStream(new ByteArrayInputStream(data))) {
-                    return gis.readAllBytes();
+                try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(data))) {
+                    in.transferTo(out);
+                    return;
                 }
             }
             case 2: { // Zlib / Deflate
-                try (InflaterInputStream iis = new InflaterInputStream(new ByteArrayInputStream(data))) {
-                    return iis.readAllBytes();
+                try (InputStream in = new InflaterInputStream(new ByteArrayInputStream(data))) {
+                    in.transferTo(out);
+                    return;
                 }
             }
             case 3:   // None (uncompressed)
-                return data;
+                out.write(data);
+                return;
             default:
                 throw new IOException(
                         "[LinearReader] Unsupported MC compression type in c2me write path: " + type
