@@ -216,16 +216,17 @@ public class LinearReader {
     private int maxDirtyRegionsBeforePressureFlush() {
         int minDirty = LinearConfig.getPressureFlushMinDirtyRegions();
         int maxDirty = Math.max(minDirty, LinearConfig.getPressureFlushMaxDirtyRegions());
+        if (DHPregenMonitor.isPregenActive()) {
+            return Math.max(minDirty, Math.min(maxDirty, 4));
+        }
+        if (!dedicatedServer) {
+            return Integer.MAX_VALUE;
+        }
+
         int flushRate = Math.max(1, DHPregenMonitor.effectiveRegionsPerSaveTick());
         int cacheSize = Math.max(8, DHPregenMonitor.effectiveCacheSize());
 
         int target = Math.max(cacheSize / 16, flushRate * 2);
-        if (!dedicatedServer) {
-            target = Math.max(minDirty, target / 2);
-        }
-        if (DHPregenMonitor.isPregenActive()) {
-            target = Math.min(target, Math.max(minDirty, 4));
-        }
 
         int backlog = flushQueue.size() + inFlightFlushes.size();
         if (backlog >= Math.max(2, flushRate)) {
