@@ -28,7 +28,6 @@ configurations {
 
 repositories {
 	mavenCentral()
-	maven { url "https://maven.shedaniel.me/" }
 }
 
 dependencies {
@@ -37,14 +36,6 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
 	compileOnly "org.jetbrains:annotations:24.0.1"
-
-	// Cloth Config — replaces ForgeConfigSpec
-	modImplementation("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
-		exclude(group: "net.fabricmc.fabric-api")
-	}
-	include("me.shedaniel.cloth:cloth-config-fabric:${cloth_config_version}") {
-		exclude(group: "net.fabricmc.fabric-api")
-	}
 
 	// ZSTD — JNI natives embedded directly (same strategy as Forge)
 	embed 'com.github.luben:zstd-jni:1.5.5-11'

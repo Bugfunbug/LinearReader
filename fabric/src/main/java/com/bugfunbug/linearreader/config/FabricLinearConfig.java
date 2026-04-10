@@ -1,18 +1,13 @@
 package com.bugfunbug.linearreader.config;
 
-import me.shedaniel.autoconfig.ConfigData;
-import me.shedaniel.autoconfig.annotation.Config;
-
 /**
- * Cloth Config data class.  AutoConfig serialises this to
- * config/linearreader-server.json on first run and loads it on subsequent runs.
- * Identical field names / defaults as ForgeLinearConfig for easy comparison.
+ * Fabric-side JSON config model stored at config/linearreader-server.json.
+ * Field names and defaults intentionally match ForgeLinearConfig for easy comparison.
  *
  * Config changes require a server restart to take effect; hot-reload is not
  * implemented because it is never critical on a headless server.
  */
-@Config(name = "linearreader-server")
-public class FabricLinearConfig implements ConfigData {
+public class FabricLinearConfig {
 
     /** Zstd level used for normal .linear writes. 2-4 is the usual sweet spot. */
     public int compressionLevel = 2;
@@ -50,8 +45,7 @@ public class FabricLinearConfig implements ConfigData {
     /** Minimum available JVM heap headroom required before recompression continues. */
     public int recompressMinFreeRamPercent = 15;
 
-    @Override
-    public void validatePostLoad() throws ValidationException {
+    public void validate() {
         compressionLevel     = clamp(compressionLevel,     1,  22);
         regionCacheSize      = clamp(regionCacheSize,      8,  1024);
         backupUpdateInterval = clamp(backupUpdateInterval, 1,  100);

@@ -1,13 +1,12 @@
 package com.bugfunbug.linearreader;
 
 import com.bugfunbug.linearreader.command.LinearCommand;
+import com.bugfunbug.linearreader.config.FabricConfigIO;
 import com.bugfunbug.linearreader.config.FabricLinearConfig;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.DHPregenMonitor;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
-import me.shedaniel.autoconfig.AutoConfig;
-import me.shedaniel.autoconfig.serializer.GsonConfigSerializer;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -300,7 +299,6 @@ public class LinearReader implements ModInitializer {
     public void onInitialize() {
         INSTANCE = this;
 
-        AutoConfig.register(FabricLinearConfig.class, GsonConfigSerializer::new);
         pushConfig();
 
         DHPregenMonitor.install();
@@ -316,8 +314,7 @@ public class LinearReader implements ModInitializer {
     }
 
     private void pushConfig() {
-        FabricLinearConfig cfg =
-                AutoConfig.getConfigHolder(FabricLinearConfig.class).getConfig();
+        FabricLinearConfig cfg = FabricConfigIO.load();
         LinearConfig.update(
                 cfg.compressionLevel,
                 cfg.regionCacheSize,
