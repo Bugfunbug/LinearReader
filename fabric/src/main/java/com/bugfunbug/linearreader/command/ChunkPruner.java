@@ -1,0 +1,544 @@
+package com.bugfunbug.linearreader.command;
+
+import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.linear.LinearRegionFile;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.LongArrayTag;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.storage.LevelResource;
+
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.BitSet;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+/**
+ * Implements /linearreader prune-chunks with a dry-run + short-lived confirmation token.
+ *
+ * Safety rules are intentionally strict and conservative:
+ * - only chunk region files under .../region are scanned
+ * - busy/changed regions are skipped or rejected
+ * - confirmation revalidates affected regions before any destructive action
+ */
+public final class ChunkPruner {
+
+    private static final long CONFIRM_WINDOW_MS = 60_000L;
+    private static final int MAX_SAMPLE_CHUNKS = 8;
+    private static final int MAX_CHAT_REGIONS = 12;
+    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?\\d+)\\.(-?\\d+)\\.linear$");
+    private static final AtomicReference<PendingPrune> PENDING = new AtomicReference<>();
+    private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+    private static final SecureRandom TOKEN_RANDOM = new SecureRandom();
+
+    private ChunkPruner() {}
+
+    public static int startDryRun(CommandSourceStack source) {
+        if (!RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(net.minecraft.network.chat.Component.literal(
+                    "[LinearReader] Chunk pruning is already running."));
+            return 0;
+        }
+
+        MinecraftServer server = source.getServer();
+        Path worldRoot = server.getWorldPath(LevelResource.ROOT);
+        source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(
+                "§6[LinearReader] Starting prune-chunks analysis. "
+                        + "This is a dry run; nothing will be deleted yet."), false);
+
+        Thread worker = new Thread(() -> {
+            try {
+                runDryRun(source, server, worldRoot);
+            } finally {
+                RUNNING.set(false);
+            }
+        }, "linearreader-prune-analyze");
+        worker.setDaemon(true);
+        worker.start();
+        return 1;
+    }
+
+    public static int confirm(CommandSourceStack source, String token) {
+        PendingPrune pending = PENDING.get();
+        if (pending == null) {
+            source.sendFailure(net.minecraft.network.chat.Component.literal(
+                    "[LinearReader] No pending prune-chunks analysis. Run /linearreader prune-chunks first."));
+            return 0;
+        }
+        if (System.currentTimeMillis() > pending.expiresAtMs()) {
+            PENDING.compareAndSet(pending, null);
+            source.sendFailure(net.minecraft.network.chat.Component.literal(
+                    "[LinearReader] The prune-chunks confirmation token expired. Run the analysis again."));
+            return 0;
+        }
+        if (!pending.token().equals(token)) {
+            source.sendFailure(net.minecraft.network.chat.Component.literal(
+                    "[LinearReader] Invalid prune-chunks confirmation token."));
+            return 0;
+        }
+        if (!RUNNING.compareAndSet(false, true)) {
+            source.sendFailure(net.minecraft.network.chat.Component.literal(
+                    "[LinearReader] Chunk pruning is already running."));
+            return 0;
+        }
+
+        source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(
+                "§6[LinearReader] Starting chunk pruning. Matching chunks will now be deleted."), false);
+
+        Thread worker = new Thread(() -> {
+            try {
+                runConfirm(source, pending);
+            } finally {
+                RUNNING.set(false);
+            }
+        }, "linearreader-prune-confirm");
+        worker.setDaemon(true);
+        worker.start();
+        return 1;
+    }
+
+    private static void runDryRun(CommandSourceStack source, MinecraftServer server, Path worldRoot) {
+        long scannedAtNs = System.nanoTime();
+        List<Path> regionFiles = findChunkRegionFiles(worldRoot);
+        if (regionFiles.isEmpty()) {
+            send(source, "§e[LinearReader] No chunk-region .linear files were found.");
+            PENDING.set(null);
+            return;
+        }
+
+        List<RegionPlan> plans = new ArrayList<>();
+        List<String> sampleChunks = new ArrayList<>();
+        int skippedBusyRegions = 0;
+        int failedRegions = 0;
+
+        for (Path regionPath : regionFiles) {
+            RegionAnalysis analysis;
+            try {
+                analysis = analyzeRegion(worldRoot, regionPath, scannedAtNs, sampleChunks);
+            } catch (IOException e) {
+                failedRegions++;
+                LinearReader.LOGGER.warn("[LinearReader] prune-chunks scan failed for {}: {}",
+                        worldRoot.relativize(regionPath), e.getMessage());
+                continue;
+            }
+
+            if (analysis.busy) {
+                skippedBusyRegions++;
+                continue;
+            }
+            if (analysis.plan() != null) {
+                plans.add(analysis.plan());
+            }
+        }
+
+        int candidateChunks = plans.stream().mapToInt(RegionPlan::candidateCount).sum();
+        if (candidateChunks == 0) {
+            PENDING.set(null);
+            send(source, "§7[LinearReader] prune-chunks found no safe candidates."
+                    + (skippedBusyRegions > 0 ? " §8(" + skippedBusyRegions + " busy region(s) skipped)" : "")
+                    + (failedRegions > 0 ? " §8(" + failedRegions + " region(s) failed to scan)" : ""));
+            return;
+        }
+
+        String token = nextToken();
+        PendingPrune pending = new PendingPrune(
+                token,
+                System.currentTimeMillis() + CONFIRM_WINDOW_MS,
+                scannedAtNs,
+                worldRoot,
+                List.copyOf(plans),
+                List.copyOf(sampleChunks),
+                skippedBusyRegions,
+                failedRegions,
+                regionFiles.size(),
+                candidateChunks
+        );
+        PENDING.set(pending);
+
+        LinearReader.LOGGER.warn("[LinearReader] prune-chunks dry run found {} candidate chunk(s) across {} region(s).",
+                candidateChunks, plans.size());
+        for (RegionPlan plan : plans) {
+            LinearReader.LOGGER.warn("[LinearReader] prune-chunks candidate region: {} -> {} chunk(s)",
+                    plan.regionLabel(), plan.candidateCount());
+        }
+
+        StringBuilder msg = new StringBuilder()
+                .append("§6[LinearReader] prune-chunks dry run complete.\n")
+                .append("§7  Candidate chunks: §f").append(candidateChunks).append('\n')
+                .append("§7  Affected regions: §f").append(plans.size()).append('\n');
+
+        if (skippedBusyRegions > 0) {
+            msg.append("§e  Busy regions skipped: §f").append(skippedBusyRegions)
+                    .append(" §8(rerun while the server is quieter)\n");
+        }
+        if (failedRegions > 0) {
+            msg.append("§e  Regions that failed to scan: §f").append(failedRegions).append('\n');
+        }
+
+        appendChatRegionList(msg, plans);
+        appendSampleChunks(msg, pending.sampleChunks());
+        msg.append("§c  WARNING: This permanently deletes matching chunk data from .linear region files.\n")
+                .append("§c  Run this while the server is quiet and make sure you have backups.\n")
+                .append("§c  Confirmation expires in 60 seconds.\n")
+                .append("§c  Confirm with: §f/linearreader prune-chunks confirm ")
+                .append(token);
+
+        send(source, msg.toString().stripTrailing());
+    }
+
+    private static void runConfirm(CommandSourceStack source, PendingPrune pending) {
+        if (!PENDING.compareAndSet(pending, null)) {
+            send(source, "§c[LinearReader] prune-chunks confirmation state changed. Run the analysis again.");
+            return;
+        }
+        if (System.currentTimeMillis() > pending.expiresAtMs()) {
+            send(source, "§c[LinearReader] The prune-chunks confirmation token expired. Run the analysis again.");
+            return;
+        }
+        if (!validatePendingPlan(pending)) {
+            send(source, "§c[LinearReader] One or more affected regions changed after the dry run. "
+                    + "No chunks were deleted. Run /linearreader prune-chunks again.");
+            return;
+        }
+
+        int deletedChunks = 0;
+        int changedRegions = 0;
+
+        LinearReader.LOGGER.warn("[LinearReader] prune-chunks confirm started for {} candidate chunk(s) across {} region(s).",
+                pending.candidateChunks(), pending.regions().size());
+
+        for (RegionPlan plan : pending.regions()) {
+            try {
+                int deletedInRegion = pruneRegion(plan, pending.scannedAtNs());
+                if (deletedInRegion > 0) {
+                    changedRegions++;
+                    deletedChunks += deletedInRegion;
+                    LinearReader.LOGGER.warn("[LinearReader] prune-chunks deleted {} chunk(s) from {}.",
+                            deletedInRegion, plan.regionLabel());
+                }
+            } catch (IOException e) {
+                LinearReader.LOGGER.error("[LinearReader] prune-chunks failed while pruning {}: {}",
+                        plan.regionLabel(), e.getMessage(), e);
+                send(source, "§c[LinearReader] prune-chunks failed while pruning "
+                        + plan.regionLabel() + ": " + e.getMessage());
+                return;
+            }
+        }
+
+        LinearReader.LOGGER.warn("[LinearReader] prune-chunks complete: {} chunk(s) deleted across {} region(s).",
+                deletedChunks, changedRegions);
+        send(source, "§a[LinearReader] prune-chunks complete. Deleted §f" + deletedChunks
+                + "§a chunk(s) across §f" + changedRegions + "§a region(s).");
+    }
+
+    private static RegionAnalysis analyzeRegion(Path worldRoot, Path regionPath, long scannedAtNs, List<String> sampleChunks)
+            throws IOException {
+
+        String regionLabel = worldRoot.relativize(regionPath).toString();
+        Matcher matcher = REGION_FILE_PATTERN.matcher(regionPath.getFileName().toString());
+        if (!matcher.matches()) {
+            return RegionAnalysis.notBusy(null);
+        }
+        int regionX = Integer.parseInt(matcher.group(1));
+        int regionZ = Integer.parseInt(matcher.group(2));
+        Path normalized = regionPath.toAbsolutePath().normalize();
+
+        LinearRegionFile openRegion = findOpenRegion(normalized);
+        if (openRegion != null && (openRegion.isDirty() || openRegion.isFlushing())) {
+            LinearReader.LOGGER.info("[LinearReader] prune-chunks skipped busy region {}", regionLabel);
+            return RegionAnalysis.busyResult();
+        }
+
+        long openMutationStart = openRegion != null ? openRegion.lastMutationTimeNs() : Long.MIN_VALUE;
+        BitSet candidates = new BitSet(1024);
+        boolean ownsRegion = openRegion == null;
+        LinearRegionFile region = ownsRegion ? new LinearRegionFile(regionPath, false) : openRegion;
+
+        try {
+            for (int localIndex = 0; localIndex < 1024; localIndex++) {
+                int localX = localIndex % 32;
+                int localZ = localIndex / 32;
+                ChunkPos pos = new ChunkPos(regionX * 32 + localX, regionZ * 32 + localZ);
+
+                try (DataInputStream dis = region.read(pos)) {
+                    if (dis == null) continue;
+                    CompoundTag tag = NbtIo.read(dis);
+                    if (tag == null) continue;
+                    if (isPrunableChunk(tag)) {
+                        candidates.set(localIndex);
+                        if (sampleChunks.size() < MAX_SAMPLE_CHUNKS) {
+                            sampleChunks.add(regionLabel + " @ chunk " + pos.x + ", " + pos.z);
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (ownsRegion) {
+                LinearRegionFile.ALL_OPEN.remove(region);
+            }
+        }
+
+        if (openRegion != null) {
+            if (openRegion.isDirty() || openRegion.isFlushing() || openRegion.lastMutationTimeNs() != openMutationStart) {
+                LinearReader.LOGGER.info("[LinearReader] prune-chunks skipped region {} because it changed during analysis.",
+                        regionLabel);
+                return RegionAnalysis.busyResult();
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            return RegionAnalysis.notBusy(null);
+        }
+
+        RegionPlan plan = new RegionPlan(
+                regionPath,
+                normalized,
+                regionLabel,
+                regionX,
+                regionZ,
+                (BitSet) candidates.clone(),
+                candidates.cardinality(),
+                Files.size(regionPath),
+                lastModifiedMillis(regionPath)
+        );
+        return RegionAnalysis.notBusy(plan);
+    }
+
+    private static boolean validatePendingPlan(PendingPrune pending) {
+        for (RegionPlan plan : pending.regions()) {
+            try {
+                if (!Files.exists(plan.path())) return false;
+                if (Files.size(plan.path()) != plan.fileSize()) return false;
+                if (lastModifiedMillis(plan.path()) != plan.lastModifiedMs()) return false;
+            } catch (IOException e) {
+                return false;
+            }
+
+            LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
+            if (openRegion != null) {
+                if (openRegion.isDirty() || openRegion.isFlushing()) return false;
+                if (openRegion.lastMutationTimeNs() > pending.scannedAtNs()) return false;
+            }
+        }
+        return true;
+    }
+
+    private static int pruneRegion(RegionPlan plan, long scannedAtNs) throws IOException {
+        LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
+        boolean ownsRegion = openRegion == null;
+        LinearRegionFile region = ownsRegion ? new LinearRegionFile(plan.path(), false) : openRegion;
+
+        try {
+            if (!ownsRegion) {
+                if (region.isDirty() || region.isFlushing() || region.lastMutationTimeNs() > scannedAtNs) {
+                    throw new IOException("region became busy after confirmation: " + plan.regionLabel());
+                }
+            }
+
+            int deleted = region.clearChunksIfUnchanged((BitSet) plan.localChunkBits().clone(),
+                    ownsRegion ? Long.MAX_VALUE : scannedAtNs);
+            if (deleted < 0) {
+                throw new IOException("region changed before prune lock was acquired: " + plan.regionLabel());
+            }
+            if (deleted > 0) {
+                region.flush();
+            }
+            return deleted;
+        } finally {
+            if (ownsRegion) {
+                LinearRegionFile.ALL_OPEN.remove(region);
+            }
+        }
+    }
+
+    private static List<Path> findChunkRegionFiles(Path worldRoot) {
+        List<Path> files = new ArrayList<>();
+        try (Stream<Path> stream = Files.walk(worldRoot)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(ChunkPruner::isChunkRegionFile)
+                    .sorted(Comparator.comparing(Path::toString))
+                    .forEach(files::add);
+        } catch (IOException e) {
+            LinearReader.LOGGER.warn("[LinearReader] prune-chunks could not walk world directory: {}", e.getMessage());
+        }
+        return files;
+    }
+
+    private static boolean isChunkRegionFile(Path path) {
+        Path parent = path.getParent();
+        if (parent == null || parent.getFileName() == null) return false;
+        if (!"region".equals(parent.getFileName().toString())) return false;
+        return REGION_FILE_PATTERN.matcher(path.getFileName().toString()).matches();
+    }
+
+    private static LinearRegionFile findOpenRegion(Path normalizedPath) {
+        for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+            if (region.getNormalizedPath().equals(normalizedPath)) {
+                return region;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isPrunableChunk(CompoundTag rawTag) {
+        CompoundTag tag = rawTag.contains("Level", Tag.TAG_COMPOUND)
+                ? rawTag.getCompound("Level")
+                : rawTag;
+
+        if (!tag.contains("InhabitedTime", Tag.TAG_ANY_NUMERIC)) return false;
+        if (tag.getLong("InhabitedTime") != 0L) return false;
+        if (hasNonEmptyList(tag, "block_entities") || hasNonEmptyList(tag, "TileEntities")) return false;
+        if (hasNonEmptyList(tag, "entities") || hasNonEmptyList(tag, "Entities")) return false;
+        if (hasStructureData(tag, "structures", "starts", "References")) return false;
+        if (hasStructureData(tag, "Structures", "Starts", "References")) return false;
+        if (hasNonEmptyList(tag, "block_ticks") || hasNonEmptyList(tag, "fluid_ticks")
+                || hasNonEmptyList(tag, "TileTicks") || hasNonEmptyList(tag, "LiquidTicks")) return false;
+        if (hasNonEmptyNestedListList(tag, "PostProcessing")) return false;
+        if (hasNonEmptyCompound(tag, "UpgradeData") || hasNonEmptyCompound(tag, "upgradeData")) return false;
+        return true;
+    }
+
+    private static boolean hasNonEmptyList(CompoundTag tag, String key) {
+        if (!tag.contains(key, Tag.TAG_LIST)) return false;
+        ListTag list = tag.getList(key, Tag.TAG_END);
+        return !list.isEmpty();
+    }
+
+    private static boolean hasNonEmptyNestedListList(CompoundTag tag, String key) {
+        if (!tag.contains(key, Tag.TAG_LIST)) return false;
+        ListTag outer = tag.getList(key, Tag.TAG_LIST);
+        for (int i = 0; i < outer.size(); i++) {
+            Tag entry = outer.get(i);
+            if (entry instanceof ListTag list && !list.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasNonEmptyCompound(CompoundTag tag, String key) {
+        return tag.contains(key, Tag.TAG_COMPOUND) && !tag.getCompound(key).isEmpty();
+    }
+
+    private static boolean hasStructureData(CompoundTag tag, String structuresKey, String startsKey, String referencesKey) {
+        if (!tag.contains(structuresKey, Tag.TAG_COMPOUND)) return false;
+        CompoundTag structures = tag.getCompound(structuresKey);
+
+        if (structures.contains(startsKey, Tag.TAG_COMPOUND) && !structures.getCompound(startsKey).isEmpty()) {
+            return true;
+        }
+
+        if (!structures.contains(referencesKey, Tag.TAG_COMPOUND)) return false;
+        CompoundTag references = structures.getCompound(referencesKey);
+        Set<String> keys = references.getAllKeys();
+        for (String key : keys) {
+            if (references.contains(key, Tag.TAG_LONG_ARRAY)) {
+                LongArrayTag arr = (LongArrayTag) references.get(key);
+                if (arr != null && arr.size() > 0) return true;
+            } else {
+                // Unknown structure reference payload: be conservative.
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static long lastModifiedMillis(Path path) throws IOException {
+        FileTime fileTime = Files.getLastModifiedTime(path);
+        return fileTime.toMillis();
+    }
+
+    private static void appendChatRegionList(StringBuilder msg, List<RegionPlan> plans) {
+        msg.append("§7  Regions:\n");
+        int shown = Math.min(plans.size(), MAX_CHAT_REGIONS);
+        for (int i = 0; i < shown; i++) {
+            RegionPlan plan = plans.get(i);
+            msg.append("§7    §f").append(plan.regionLabel())
+                    .append(" §7(").append(plan.candidateCount()).append(" chunk(s))\n");
+        }
+        if (plans.size() > shown) {
+            msg.append("§7    §8... and ").append(plans.size() - shown).append(" more\n");
+        }
+    }
+
+    private static void appendSampleChunks(StringBuilder msg, List<String> sampleChunks) {
+        if (sampleChunks.isEmpty()) return;
+        msg.append("§7  Sample chunks:\n");
+        for (String sample : sampleChunks) {
+            msg.append("§7    §f").append(sample).append('\n');
+        }
+    }
+
+    private static String nextToken() {
+        byte[] bytes = new byte[4];
+        TOKEN_RANDOM.nextBytes(bytes);
+        StringBuilder sb = new StringBuilder(8);
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.ROOT, "%02x", b & 0xFF));
+        }
+        return sb.toString();
+    }
+
+    private static void send(CommandSourceStack source, String msg) {
+        source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(msg), false);
+    }
+
+    private record RegionAnalysis(boolean busy, RegionPlan plan) {
+        private static RegionAnalysis busyResult() {
+            return new RegionAnalysis(true, null);
+        }
+
+        private static RegionAnalysis notBusy(RegionPlan plan) {
+            return new RegionAnalysis(false, plan);
+        }
+    }
+
+    private record RegionPlan(
+            Path path,
+            Path normalizedPath,
+            String regionLabel,
+            int regionX,
+            int regionZ,
+            BitSet localChunkBits,
+            int candidateCount,
+            long fileSize,
+            long lastModifiedMs) {}
+
+    private record PendingPrune(
+            String token,
+            long expiresAtMs,
+            long scannedAtNs,
+            Path worldRoot,
+            List<RegionPlan> regions,
+            List<String> sampleChunks,
+            int skippedBusyRegions,
+            int failedRegions,
+            int scannedRegionFiles,
+            int candidateChunks) {
+
+        private PendingPrune {
+            Objects.requireNonNull(token, "token");
+            Objects.requireNonNull(worldRoot, "worldRoot");
+            Objects.requireNonNull(regions, "regions");
+            Objects.requireNonNull(sampleChunks, "sampleChunks");
+        }
+    }
+}

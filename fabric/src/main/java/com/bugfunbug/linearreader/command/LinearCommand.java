@@ -8,6 +8,7 @@ import com.bugfunbug.linearreader.linear.LinearExporter;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -44,6 +45,11 @@ public class LinearCommand {
                                 .executes(LinearCommand::executePos))
                         .then(Commands.literal("verify")
                                 .executes(LinearCommand::executeVerify))
+                        .then(Commands.literal("prune-chunks")
+                                .executes(LinearCommand::executePruneChunks)
+                                .then(Commands.literal("confirm")
+                                        .then(Commands.argument("token", StringArgumentType.word())
+                                                .executes(LinearCommand::executePruneChunksConfirm))))
                         .then(Commands.literal("bench")
                                 .executes(LinearCommand::executeBench)
                                 .then(Commands.literal("reset")
@@ -222,6 +228,14 @@ public class LinearCommand {
 
     private static void sendFromThread(CommandSourceStack source, String msg) {
         source.sendSuccess(() -> Component.literal(msg), false);
+    }
+
+    private static int executePruneChunks(CommandContext<CommandSourceStack> ctx) {
+        return ChunkPruner.startDryRun(ctx.getSource());
+    }
+
+    private static int executePruneChunksConfirm(CommandContext<CommandSourceStack> ctx) {
+        return ChunkPruner.confirm(ctx.getSource(), StringArgumentType.getString(ctx, "token"));
     }
 
     // ---------------------------------------------------------------------------

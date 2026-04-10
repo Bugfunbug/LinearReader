@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Comparator;
 import java.util.Collections;
 import java.util.List;
@@ -392,6 +393,48 @@ public class LinearRegionFile {
                 materializedBytes -= oldDirectLen;
                 markDirtyNow();
             }
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * Removes multiple chunk entries from this region under one write lock.
+     *
+     * @return number of chunks deleted, or -1 if the region became unstable before the lock was acquired.
+     */
+    public int clearChunksIfUnchanged(BitSet localChunkBits, long maxMutationTimeNs) throws IOException {
+        if (localChunkBits.isEmpty()) return 0;
+
+        loadIfNeeded();
+        markAccessed();
+        lock.writeLock().lock();
+        try {
+            if (flushing || lastMutationNs > maxMutationTimeNs) {
+                return -1;
+            }
+
+            int cleared = 0;
+            for (int idx = localChunkBits.nextSetBit(0); idx >= 0; idx = localChunkBits.nextSetBit(idx + 1)) {
+                int oldLen = chunkLength(idx);
+                byte[] oldDirect = chunkData[idx];
+                int oldDirectLen = oldDirect != null ? oldDirect.length : 0;
+                if (oldLen <= 0) continue;
+
+                chunkData[idx] = null;
+                chunkSizes[idx] = 0;
+                chunkOffsets[idx] = 0;
+                timestamps[idx] = 0;
+                chunkCount--;
+                totalDataBytes -= oldLen;
+                materializedBytes -= oldDirectLen;
+                cleared++;
+            }
+
+            if (cleared > 0) {
+                markDirtyNow();
+            }
+            return cleared;
         } finally {
             lock.writeLock().unlock();
         }
