@@ -3,7 +3,7 @@ DO WITH THAT INFORMATION WHAT YOU WISH.
 -----
 
 LinearReader is a server-side mod for Forge/NeoForge/Fabric (1.20.1)
-that draws heavily from Xymb-endcrystalme's Linear file format.
+that draws heavily from Xymb-endcrystalme's Linear file format (which uses Zstd instead of Zlib).
 (For more information about the Linear format see
 https://github.com/xymb-endcrystalme/LinearRegionFileFormatTools.)
 This mod completely replaces Minecraft's Anvil file format with the Linear
