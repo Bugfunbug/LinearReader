@@ -1,7 +1,8 @@
 package com.bugfunbug.linearreader.config;
 
 /**
- * Fabric-side JSON config model stored at config/linearreader-server.json.
+ * Fabric-side config model stored at config/linearreader-server.toml.
+ * Legacy config/linearreader-server.json is migrated forward automatically.
  * Field names and defaults intentionally match ForgeLinearConfig for easy comparison.
  *
  * Config changes require a server restart to take effect; hot-reload is not
