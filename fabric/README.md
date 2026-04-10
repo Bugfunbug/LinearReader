@@ -96,4 +96,6 @@ mods. If you find a mod incompatibility please let me know.
 
 
 ### Dependencies:
-The Fabric version of LinearReader requires Cloth Config API.
+Only LinearReader-fabric-1.1.1 and below needs Cloth Config API. 
+(The Fabric version of LinearReader needs Fabric API.) 
+Everything else has no dependencies.
