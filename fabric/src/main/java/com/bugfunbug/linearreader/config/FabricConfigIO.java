@@ -33,22 +33,26 @@ public final class FabricConfigIO {
         Path tomlPath = tomlPath();
         Path legacyJsonPath = legacyJsonPath();
         FabricLinearConfig config = new FabricLinearConfig();
+        boolean migratedFromJson = false;
 
         if (Files.exists(tomlPath)) {
             config = loadToml(tomlPath);
         } else if (Files.exists(legacyJsonPath)) {
             config = loadLegacyJson(legacyJsonPath);
+            migratedFromJson = true;
+        }
+
+        config.validate();
+        if (save(config) && migratedFromJson) {
+            deleteLegacyJson(legacyJsonPath);
             LinearReader.LOGGER.info(
                     "[LinearReader] Migrated Fabric config from {} to {}.",
                     legacyJsonPath.getFileName(), tomlPath.getFileName());
         }
-
-        config.validate();
-        save(config);
         return config;
     }
 
-    public static void save(FabricLinearConfig config) {
+    public static boolean save(FabricLinearConfig config) {
         Path path = tomlPath();
         config.validate();
 
@@ -102,10 +106,12 @@ public final class FabricConfigIO {
         try {
             Files.createDirectories(path.getParent());
             Files.write(path, lines);
+            return true;
         } catch (IOException e) {
             LinearReader.LOGGER.warn(
                     "[LinearReader] Failed to write Fabric config {}: {}",
                     path.getFileName(), e.getMessage());
+            return false;
         }
     }
 
@@ -211,5 +217,15 @@ public final class FabricConfigIO {
 
     private static Path legacyJsonPath() {
         return FabricLoader.getInstance().getConfigDir().resolve(LEGACY_JSON_FILE_NAME);
+    }
+
+    private static void deleteLegacyJson(Path legacyJsonPath) {
+        try {
+            Files.deleteIfExists(legacyJsonPath);
+        } catch (IOException e) {
+            LinearReader.LOGGER.warn(
+                    "[LinearReader] Failed to delete legacy Fabric config {} after migration: {}",
+                    legacyJsonPath.getFileName(), e.getMessage());
+        }
     }
 }
