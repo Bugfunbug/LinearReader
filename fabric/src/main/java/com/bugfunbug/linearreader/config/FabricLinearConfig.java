@@ -14,32 +14,41 @@ import me.shedaniel.autoconfig.annotation.Config;
 @Config(name = "linearreader-server")
 public class FabricLinearConfig implements ConfigData {
 
-    /** Zstd compression level 1–22. 2–4 for live use, 22 for idle recompressor. */
+    /** Zstd level used for normal .linear writes. 2-4 is the usual sweet spot. */
     public int compressionLevel = 2;
 
-    /** Max region files held open. More = faster; more RAM. */
+    /** Region files kept open in the cache. Higher is faster, lower uses less RAM. */
     public int regionCacheSize = 256;
 
-    /** Create .linear.bak on first load, refresh every backupUpdateInterval saves. */
+    /** Keep a .linear.bak beside each region file and refresh it periodically. */
     public boolean backupEnabled = true;
 
-    /** Saves between .bak refreshes. Only used when backupEnabled = true. */
+    /** Successful saves between backup refreshes when backups are enabled. */
     public int backupUpdateInterval = 10;
 
-    /** Max dirty regions submitted to the flush executor per server tick. */
+    /** Dirty regions submitted to the flush executor per server tick during world saves. */
     public int regionsPerSaveTick = 4;
 
-    /** Lower guardrail for the dynamic pressure-flush dirty-region target. */
+    /** Lower bound for the dynamic pressure-flush dirty-region target. */
     public int pressureFlushMinDirtyRegions = 4;
 
-    /** Upper guardrail for the dynamic pressure-flush dirty-region target. */
+    /** Upper bound for the dynamic pressure-flush dirty-region target. */
     public int pressureFlushMaxDirtyRegions = 16;
 
-    /** Warn if a region read/write exceeds this many ms. -1 = disabled. */
+    /** Warn if a region read or write takes longer than this many milliseconds. -1 disables it. */
     public int slowIoThresholdMs = 500;
 
-    /** Warn before writing when free space (GB) is below this value. -1 = disabled. */
+    /** Warn before writing when free disk space drops below this many GB. -1 disables it. */
     public int diskSpaceWarnGb = 1;
+
+    /** Enable automatic idle recompression after the server has been quiet for a while. */
+    public boolean autoRecompressEnabled = true;
+
+    /** Minutes with no chunk I/O before automatic recompression may start. */
+    public int idleThresholdMinutes = 20;
+
+    /** Minimum available JVM heap headroom required before recompression continues. */
+    public int recompressMinFreeRamPercent = 15;
 
     @Override
     public void validatePostLoad() throws ValidationException {
@@ -52,6 +61,8 @@ public class FabricLinearConfig implements ConfigData {
         pressureFlushMaxDirtyRegions = Math.max(pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);
         slowIoThresholdMs    = Math.max(-1, slowIoThresholdMs);
         diskSpaceWarnGb      = Math.max(-1, diskSpaceWarnGb);
+        idleThresholdMinutes = clamp(idleThresholdMinutes, 5, 1440);
+        recompressMinFreeRamPercent = clamp(recompressMinFreeRamPercent, 5, 50);
     }
 
     private static int clamp(int v, int min, int max) {

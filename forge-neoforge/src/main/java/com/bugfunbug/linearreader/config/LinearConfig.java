@@ -27,6 +27,9 @@ public final class LinearConfig {
     private static volatile int     pressureFlushMaxDirtyRegions = 16;
     private static volatile int     slowIoThresholdMs    = 500;
     private static volatile int     diskSpaceWarnGb      = 1;
+    private static volatile boolean autoRecompressEnabled = true;
+    private static volatile int     idleThresholdMinutes  = 20;
+    private static volatile int     recompressMinFreeRamPercent = 15;
 
     // -------------------------------------------------------------------------
     // Getters — called everywhere in mod logic
@@ -41,6 +44,9 @@ public final class LinearConfig {
     public static int     getPressureFlushMaxDirtyRegions() { return pressureFlushMaxDirtyRegions; }
     public static int     getSlowIoThresholdMs()    { return slowIoThresholdMs; }
     public static int     getDiskSpaceWarnGb()      { return diskSpaceWarnGb; }
+    public static boolean isAutoRecompressEnabled() { return autoRecompressEnabled; }
+    public static int     getIdleThresholdMinutes() { return idleThresholdMinutes; }
+    public static int     getRecompressMinFreeRamPercent() { return recompressMinFreeRamPercent; }
 
     // -------------------------------------------------------------------------
     // Called by loader-specific config to push current values in
@@ -55,7 +61,10 @@ public final class LinearConfig {
             int     pressureFlushMinDirtyRegions,
             int     pressureFlushMaxDirtyRegions,
             int     slowIoThresholdMs,
-            int     diskSpaceWarnGb) {
+            int     diskSpaceWarnGb,
+            boolean autoRecompressEnabled,
+            int     idleThresholdMinutes,
+            int     recompressMinFreeRamPercent) {
 
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
@@ -67,5 +76,8 @@ public final class LinearConfig {
                 pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);
         LinearConfig.slowIoThresholdMs    = slowIoThresholdMs;
         LinearConfig.diskSpaceWarnGb      = diskSpaceWarnGb;
+        LinearConfig.autoRecompressEnabled = autoRecompressEnabled;
+        LinearConfig.idleThresholdMinutes  = idleThresholdMinutes;
+        LinearConfig.recompressMinFreeRamPercent = recompressMinFreeRamPercent;
     }
 }

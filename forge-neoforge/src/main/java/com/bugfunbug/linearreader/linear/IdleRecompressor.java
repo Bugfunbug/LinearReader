@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.config.LinearConfig;
 import com.github.luben.zstd.Zstd;
 
 import java.io.IOException;
@@ -38,11 +39,11 @@ public final class IdleRecompressor {
 
     /** Zstd level used during idle/AFK recompression. */
     public static final int  TARGET_LEVEL      = 22;
-    /** No chunk IO for this long before auto-recompression starts (20 min). */
-    public static final long IDLE_THRESHOLD_MS = 20L * 60L * 1_000L;
     private static final long CHECK_INTERVAL_MS = 60L * 1_000L;  // poll every minute
     /** Pause between files - keeps disk load low during recompression. */
     private static final long FILE_DELAY_MS     = 3_000L;
+    /** Pause when JVM heap headroom falls below the configured safety threshold. */
+    private static final long LOW_RAM_BACKOFF_MS = 3L * 60L * 1_000L;
 
     // Region folders registered as each RegionFileStorage opens.
     private static final Set<Path> KNOWN_FOLDERS = ConcurrentHashMap.newKeySet();
@@ -61,6 +62,7 @@ public final class IdleRecompressor {
     private static final AtomicInteger FILES_UNSTABLE_SKIPPED = new AtomicInteger(0);
     private static final AtomicInteger FILES_NO_SIZE_GAIN = new AtomicInteger(0);
     private static final AtomicInteger FILES_FAILED = new AtomicInteger(0);
+    private static final AtomicInteger LOW_RAM_PAUSES = new AtomicInteger(0);
     private static final AtomicLong    BYTES_SAVED        = new AtomicLong(0);
 
     private enum RecompressOutcome {
@@ -110,9 +112,10 @@ public final class IdleRecompressor {
                 } catch (InterruptedException e) {
                     break;
                 }
+                if (!LinearConfig.isAutoRecompressEnabled()) continue;
                 if (RUNNING.get()) continue;
                 long idleMs = System.currentTimeMillis() - LAST_IO_MS.get();
-                if (idleMs >= IDLE_THRESHOLD_MS) {
+                if (idleMs >= idleThresholdMs()) {
                     LinearReader.LOGGER.info(
                             "[LinearReader] Server idle for {} min - starting background recompression.",
                             idleMs / 60_000L);
@@ -147,13 +150,16 @@ public final class IdleRecompressor {
 
     public static boolean isRunning()         { return RUNNING.get(); }
     public static boolean isManual()          { return IS_MANUAL.get(); }
+    public static boolean isAutoEnabled()     { return LinearConfig.isAutoRecompressEnabled(); }
     public static int     filesScanned()      { return FILES_SCANNED.get(); }
     public static int     filesRecompressed() { return FILES_RECOMPRESSED.get(); }
     public static int     filesAlreadyOptimal() { return FILES_ALREADY_OPTIMAL.get(); }
     public static int     filesUnstableSkipped() { return FILES_UNSTABLE_SKIPPED.get(); }
-    public static long    idleThresholdMs()   { return IDLE_THRESHOLD_MS; }
+    public static int     lowRamPauses()      { return LOW_RAM_PAUSES.get(); }
+    public static long    idleThresholdMs()   { return LinearConfig.getIdleThresholdMinutes() * 60_000L; }
     public static long    idleRemainingMs() {
-        long remaining = IDLE_THRESHOLD_MS - (System.currentTimeMillis() - LAST_IO_MS.get());
+        if (!LinearConfig.isAutoRecompressEnabled()) return 0L;
+        long remaining = idleThresholdMs() - (System.currentTimeMillis() - LAST_IO_MS.get());
         return Math.max(0L, remaining);
     }
     public static long    bytesSaved()        { return BYTES_SAVED.get(); }
@@ -189,6 +195,7 @@ public final class IdleRecompressor {
         FILES_UNSTABLE_SKIPPED.set(0);
         FILES_NO_SIZE_GAIN.set(0);
         FILES_FAILED.set(0);
+        LOW_RAM_PAUSES.set(0);
         BYTES_SAVED.set(0);
     }
 
@@ -213,6 +220,11 @@ public final class IdleRecompressor {
         int failed = FILES_FAILED.get();
         if (failed > 0) {
             msg.append(", ").append(failed).append(" failed");
+        }
+
+        int lowRamPauses = LOW_RAM_PAUSES.get();
+        if (lowRamPauses > 0) {
+            msg.append(", ").append(lowRamPauses).append(" low-RAM pauses");
         }
 
         msg.append(", ").append(BYTES_SAVED.get()).append(" bytes saved.");
@@ -284,6 +296,27 @@ public final class IdleRecompressor {
         return false;
     }
 
+    private static int availableHeapPercent() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxMemory = runtime.maxMemory();
+        if (maxMemory <= 0L) return 100;
+
+        long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+        long availableMemory = Math.max(0L, maxMemory - usedMemory);
+        return (int) Math.max(0L, Math.min(100L, (availableMemory * 100L) / maxMemory));
+    }
+
+    private static void awaitHeapHeadroom(Path path) throws InterruptedException {
+        int thresholdPercent = LinearConfig.getRecompressMinFreeRamPercent();
+        while (availableHeapPercent() < thresholdPercent) {
+            LOW_RAM_PAUSES.incrementAndGet();
+            LinearReader.LOGGER.info(
+                    "[LinearReader] Pausing recompression for {} because JVM heap headroom is {}% (< {}%).",
+                    path.getFileName(), availableHeapPercent(), thresholdPercent);
+            Thread.sleep(LOW_RAM_BACKOFF_MS);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // File-level recompression — package-private so backup logic can use it
     // -------------------------------------------------------------------------
@@ -293,7 +326,7 @@ public final class IdleRecompressor {
      * Returns bytes saved, or 0 if the file was already at/above target level
      * or if recompression would make it larger.
      */
-    static RecompressResult recompressFile(Path path) throws IOException {
+    static RecompressResult recompressFile(Path path) throws IOException, InterruptedException {
         if (isRegionUnstable(path)) {
             return new RecompressResult(RecompressOutcome.UNSTABLE_SKIPPED, 0L);
         }
@@ -313,6 +346,8 @@ public final class IdleRecompressor {
         if ((header[17] & 0xFF) >= TARGET_LEVEL) {
             return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
         }
+
+        awaitHeapHeadroom(path);
 
         // Full recompression needed — now read the whole file.
         return recompressFileTo(path, path, TARGET_LEVEL);

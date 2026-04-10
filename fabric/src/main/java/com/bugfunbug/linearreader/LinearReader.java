@@ -327,7 +327,10 @@ public class LinearReader implements ModInitializer {
                 cfg.pressureFlushMinDirtyRegions,
                 cfg.pressureFlushMaxDirtyRegions,
                 cfg.slowIoThresholdMs,
-                cfg.diskSpaceWarnGb
+                cfg.diskSpaceWarnGb,
+                cfg.autoRecompressEnabled,
+                cfg.idleThresholdMinutes,
+                cfg.recompressMinFreeRamPercent
         );
     }
 

@@ -24,6 +24,9 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MAX_DIRTY_REGIONS;
     private static final ForgeConfigSpec.IntValue     SLOW_IO_THRESHOLD_MS;
     private static final ForgeConfigSpec.IntValue     DISK_SPACE_WARN_GB;
+    private static final ForgeConfigSpec.BooleanValue AUTO_RECOMPRESS_ENABLED;
+    private static final ForgeConfigSpec.IntValue     IDLE_THRESHOLD_MINUTES;
+    private static final ForgeConfigSpec.IntValue     RECOMPRESS_MIN_FREE_RAM_PERCENT;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -31,33 +34,33 @@ public final class ForgeLinearConfig {
 
         COMPRESSION_LEVEL = builder
                 .comment(
-                        "Zstd compression level for .linear region files. Range: 1-22.",
-                        " 2-4 = recommended (good balance for live compression)",
-                        " 22  = slowest, smallest files (used by idle recompressor)",
+                        "Zstd level used for normal .linear writes. Range: 1-22.",
+                        "2-4 = recommended for normal server use.",
+                        "22 = slowest, smallest output and is used by the idle recompressor.",
                         "Default = 2"
                 )
                 .defineInRange("compressionLevel", 2, 1, 22);
 
         REGION_CACHE_SIZE = builder
                 .comment(
-                        "Maximum number of region files to keep open in the cache.",
-                        "Larger = faster repeated access to many regions, more RAM.",
-                        "Smaller = less RAM, more frequent disk reads.",
+                        "Maximum number of region files kept open in the cache.",
+                        "Higher = faster repeated access across many regions.",
+                        "Lower = less RAM use, but more cache misses and disk reads.",
                         "Default = 256"
                 )
                 .defineInRange("regionCacheSize", 256, 8, 1024);
 
         BACKUP_ENABLED = builder
                 .comment(
-                        "Create a .linear.bak backup the first time each region is loaded.",
-                        "Refreshes every backupUpdateInterval saves.",
-                        "Backups are compressed at level 19 on a background thread."
+                        "Keep a .linear.bak beside each region file.",
+                        "A backup is created on first load and refreshed every",
+                        "backupUpdateInterval successful saves."
                 )
                 .define("backupEnabled", true);
 
         BACKUP_UPDATE_INTERVAL = builder
                 .comment(
-                        "How many successful saves of a region before its .bak is refreshed.",
+                        "Successful saves of a region before its .bak is refreshed.",
                         "Only applies when backupEnabled = true."
                 )
                 .defineInRange("backupUpdateInterval", 10, 1, 100);
@@ -66,29 +69,30 @@ public final class ForgeLinearConfig {
                 .comment(
                         "Maximum dirty regions submitted to the background flush executor",
                         "per server tick during a world save.",
+                        "Higher drains backlog faster, but increases save-time work.",
                         "Default = 4"
                 )
                 .defineInRange("regionsPerSaveTick", 4, 1, 64);
 
         PRESSURE_FLUSH_MIN_DIRTY_REGIONS = builder
                 .comment(
-                        "Lower guardrail for the dynamic pressure-flush dirty-region target.",
-                        "Smaller = more aggressive background draining under pressure.",
+                        "Lower bound for the dynamic pressure-flush dirty-region target.",
+                        "Smaller values make pressure flushing kick in more aggressively.",
                         "Default = 4"
                 )
                 .defineInRange("pressureFlushMinDirtyRegions", 4, 1, 64);
 
         PRESSURE_FLUSH_MAX_DIRTY_REGIONS = builder
                 .comment(
-                        "Upper guardrail for the dynamic pressure-flush dirty-region target.",
-                        "Larger = more backlog allowed before pressure flushing ramps up.",
+                        "Upper bound for the dynamic pressure-flush dirty-region target.",
+                        "Larger values allow more backlog before pressure flushing ramps up.",
                         "Default = 16"
                 )
                 .defineInRange("pressureFlushMaxDirtyRegions", 16, 1, 128);
 
         SLOW_IO_THRESHOLD_MS = builder
                 .comment(
-                        "Warn in the log if reading or writing a region takes longer than",
+                        "Warn in the log if a region read or write takes longer than",
                         "this many milliseconds. Set to -1 to disable.",
                         "Default = 500"
                 )
@@ -101,6 +105,32 @@ public final class ForgeLinearConfig {
                         "Default = 1"
                 )
                 .defineInRange("diskSpaceWarnGb", 1, -1, 1000);
+
+        AUTO_RECOMPRESS_ENABLED = builder
+                .comment(
+                        "Enable automatic idle recompression after the server has had",
+                        "no chunk I/O for the configured threshold.",
+                        "Manual /linearreader afk-compress still works when this is false.",
+                        "Default = true"
+                )
+                .define("autoRecompressEnabled", true);
+
+        IDLE_THRESHOLD_MINUTES = builder
+                .comment(
+                        "Minutes with no chunk I/O before automatic recompression may start.",
+                        "Only applies when autoRecompressEnabled = true.",
+                        "Default = 20"
+                )
+                .defineInRange("idleThresholdMinutes", 20, 5, 1440);
+
+        RECOMPRESS_MIN_FREE_RAM_PERCENT = builder
+                .comment(
+                        "Minimum available JVM heap headroom required during recompression.",
+                        "If the worker drops below this percent it pauses for a few minutes",
+                        "before trying again.",
+                        "Default = 15"
+                )
+                .defineInRange("recompressMinFreeRamPercent", 15, 5, 50);
 
         builder.pop();
         SPEC = builder.build();
@@ -122,7 +152,10 @@ public final class ForgeLinearConfig {
                 pressureFlushMin,
                 pressureFlushMax,
                 SLOW_IO_THRESHOLD_MS.get(),
-                DISK_SPACE_WARN_GB.get()
+                DISK_SPACE_WARN_GB.get(),
+                AUTO_RECOMPRESS_ENABLED.get(),
+                IDLE_THRESHOLD_MINUTES.get(),
+                RECOMPRESS_MIN_FREE_RAM_PERCENT.get()
         );
     }
 }

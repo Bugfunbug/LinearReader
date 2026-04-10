@@ -1,10 +1,11 @@
 package com.bugfunbug.linearreader.command;
 
 import com.bugfunbug.linearreader.LinearReader;
-import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.bugfunbug.linearreader.LinearStats;
+import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearExporter;
+import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -307,13 +308,22 @@ public class LinearCommand {
                     + "§a  Upgraded: §f" + IdleRecompressor.filesRecompressed()
                     + "§a  Already 22: §f" + IdleRecompressor.filesAlreadyOptimal()
                     + "§a  Skipped: §f" + IdleRecompressor.filesUnstableSkipped()
+                    + "§a  Low-RAM pauses: §f" + IdleRecompressor.lowRamPauses()
                     + "§a  Saved: §f"    + fmtSize(IdleRecompressor.bytesSaved());
         } else {
-            long idleRemainingMs = IdleRecompressor.idleRemainingMs();
-            String autoStatus = idleRemainingMs == 0L
-                    ? "§aauto ready to start"
-                    : "§7auto in §f" + fmtDuration(idleRemainingMs);
+            String autoStatus;
+            if (!IdleRecompressor.isAutoEnabled()) {
+                autoStatus = "§eauto disabled";
+            } else {
+                long idleRemainingMs = IdleRecompressor.idleRemainingMs();
+                autoStatus = idleRemainingMs == 0L
+                        ? "§aauto ready to start"
+                        : "§7auto in §f" + fmtDuration(idleRemainingMs);
+            }
             status = "§7[LinearReader] Recompression idle (" + autoStatus + "§7). "
+                    + "§7Threshold: §f" + (IdleRecompressor.idleThresholdMs() / 60_000L) + "m"
+                    + "§7  Min free RAM: §f" + LinearConfig.getRecompressMinFreeRamPercent() + "%"
+                    + "§7. "
                     + "Use '§flinearreader afk-compress start§7' to run manually.";
         }
         ctx.getSource().sendSuccess(() -> Component.literal(status), false);
