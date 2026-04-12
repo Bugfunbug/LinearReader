@@ -48,8 +48,13 @@ public class LinearCommand {
                         .then(Commands.literal("prune-chunks")
                                 .executes(LinearCommand::executePruneChunks)
                                 .then(Commands.literal("confirm")
+                                        .executes(LinearCommand::executePruneChunksConfirm)
                                         .then(Commands.argument("token", StringArgumentType.word())
                                                 .executes(LinearCommand::executePruneChunksConfirm))))
+                        .then(Commands.literal("sync-backups")
+                                .executes(LinearCommand::executeSyncBackups)
+                                .then(Commands.literal("confirm")
+                                        .executes(LinearCommand::executeSyncBackupsConfirm)))
                         .then(Commands.literal("bench")
                                 .executes(LinearCommand::executeBench)
                                 .then(Commands.literal("reset")
@@ -235,7 +240,15 @@ public class LinearCommand {
     }
 
     private static int executePruneChunksConfirm(CommandContext<CommandSourceStack> ctx) {
-        return ChunkPruner.confirm(ctx.getSource(), StringArgumentType.getString(ctx, "token"));
+        return ChunkPruner.confirm(ctx.getSource());
+    }
+
+    private static int executeSyncBackups(CommandContext<CommandSourceStack> ctx) {
+        return BackupSyncer.startDryRun(ctx.getSource());
+    }
+
+    private static int executeSyncBackupsConfirm(CommandContext<CommandSourceStack> ctx) {
+        return BackupSyncer.confirm(ctx.getSource());
     }
 
     // ---------------------------------------------------------------------------

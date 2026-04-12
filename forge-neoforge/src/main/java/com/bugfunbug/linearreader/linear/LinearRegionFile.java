@@ -343,6 +343,19 @@ public class LinearRegionFile {
         return lastMutationNs;
     }
 
+    public int storedChunkBytes(int localIndex) throws IOException {
+        if (localIndex < 0 || localIndex >= CHUNK_COUNT) {
+            throw new IllegalArgumentException("local chunk index out of range: " + localIndex);
+        }
+        loadIfNeeded();
+        lock.readLock().lock();
+        try {
+            return chunkLength(localIndex);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     public boolean canEvictFromCache() {
         return !dirty && !flushing;
     }
@@ -937,8 +950,16 @@ public class LinearRegionFile {
     // Backup helpers
     // -------------------------------------------------------------------------
 
+    public static Path backupPathFor(Path linearPath) {
+        return linearPath.resolveSibling(linearPath.getFileName() + ".bak");
+    }
+
+    public static void writeBackupCopy(Path linearPath) throws IOException {
+        IdleRecompressor.recompressFileTo(linearPath, backupPathFor(linearPath), BACKUP_COMPRESSION_LEVEL);
+    }
+
     private Path bakPath() {
-        return path.resolveSibling(path.getFileName() + ".bak");
+        return backupPathFor(path);
     }
 
     private void createBackupIfAbsent() {
