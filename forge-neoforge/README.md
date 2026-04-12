@@ -24,7 +24,7 @@ to be compressed much further than before. Additionally, when I/O is idle
 for some time, or when afk compression is started manually via a command,
 LinearReader will compress all `.linear` files to the maximum level,
 reducing the world's storage footprint without lagging the world while
-people are playing.
+people are online.
 
 
 ### Backup System:
@@ -63,6 +63,18 @@ LinearReader comes with a bunch of commands (`/linearreader`):
   the `.linear` region files.
 - `export-mca stop`: stops exporting the `.linear` files to `.mca`.
 - `export-mca`: returns the status of the exportation.
+- `prune-chunks`: scans all `.linear` files and reports how many chunks are
+  deemed unnecessary (those chunks have a `InhabitedTime` value of 0, have
+  no structures or tile entities, and the server isn't doing anything with
+  that chunk currently) and can safely be deleted. This command can save a
+  couple of MBs of storage, but don't expect too much from it. In order for
+  the chunk pruning to run, `/linearreader prune-chunks confirm` must be run
+  after running `/linearreader prune-chunks`. This command does not touch `.bak`
+  files.
+- `sync-backups`: scans all `.bak` files and will sync them to the world's
+  current `.linear` files by creating missing backups files and editing current
+  backup files. Must run `/linearreader sync-backups confirm` after running
+  `/linearreader sync-backups`. This command will lag the server.
 
 
 ### MCA Conversion:
@@ -72,8 +84,10 @@ files (so back them up first).
 
 
 ### Config:
-LinearReader also has a config which allows for a lot of features to be
-adjusted however you'd like, such as:
+LinearReader also has a config file which allows for a lot of features to be
+adjusted however you'd like. Older config files will update/migrate to the new
+(post-1.1.2) config format automatically. The following can be changed through
+the config:
 - `compressionLevel`: at what level should LinearReader initially compress
   files to?
 - `regionCacheSize`: how large should the cache be for open regions?
@@ -82,10 +96,18 @@ adjusted however you'd like, such as:
   `.bak` is refreshed?
 - `regionsPerSaveTick`: how many regions should LinearReader try to save in
   one tick?
+- `pressureFlushMinDirtyRegions`/`pressureFlushMaxDirtyRegions`: what is the
+  minimum and maximum amount of dirty regions that can be pressure flushed?
 - `slowIoThresholdMs`: what is the minimum amount of milliseconds a file
   should take to save for a warning message to be sent to the log?
 - `diskSpaceWarnGb`: what amount of disk space should be left for a warning
   to be sent to the log?
+- `autoRecompressEnabled`: should `.linear` files automatically recompress
+  further when disk I/O is idle?
+- `idleThresholdMinutes`: how many minutes must disk I/O be idle for the
+  auto-recompressor to kick in?
+- `recompressMinFreeRamPercent`: what is the minimum amount of JVM heap
+  headroom required while auto-recompression runs?
 
 
 ### Compatibility:
