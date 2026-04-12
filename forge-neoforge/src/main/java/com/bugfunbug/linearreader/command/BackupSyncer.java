@@ -333,14 +333,14 @@ public final class BackupSyncer {
     }
 
     private static String formatBytes(long bytes) {
-        if (bytes < 1024L) return bytes + " B";
+        if (bytes < 1000L) return bytes + " B";
         double value = bytes;
-        String[] units = {"KiB", "MiB", "GiB", "TiB"};
+        String[] units = {"KB", "MB", "GB", "TB"};
         int unitIndex = -1;
         do {
-            value /= 1024.0;
+            value /= 1000.0;
             unitIndex++;
-        } while (value >= 1024.0 && unitIndex < units.length - 1);
+        } while (value >= 1000.0 && unitIndex < units.length - 1);
         return String.format(java.util.Locale.ROOT, "%.2f %s", value, units[unitIndex]);
     }
 

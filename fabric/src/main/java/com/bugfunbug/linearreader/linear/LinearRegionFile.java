@@ -356,6 +356,47 @@ public class LinearRegionFile {
         }
     }
 
+    public long estimateFileSizeAfterRemoving(BitSet localChunkBits) throws IOException {
+        loadIfNeeded();
+        markAccessed();
+
+        final byte[][] dataSnap;
+        final int[] sizeSnap;
+        final int[] offsetSnap;
+        final int[] tsSnap;
+        final int countSnapStart;
+        final long totalBytesSnapStart;
+        final byte[] bodySnap;
+
+        lock.readLock().lock();
+        try {
+            dataSnap = chunkData.clone();
+            sizeSnap = chunkSizes.clone();
+            offsetSnap = chunkOffsets.clone();
+            tsSnap = timestamps.clone();
+            countSnapStart = chunkCount;
+            totalBytesSnapStart = totalDataBytes;
+            bodySnap = loadedBody;
+        } finally {
+            lock.readLock().unlock();
+        }
+
+        int countSnap = countSnapStart;
+        long totalBytesSnap = totalBytesSnapStart;
+        for (int idx = localChunkBits.nextSetBit(0); idx >= 0; idx = localChunkBits.nextSetBit(idx + 1)) {
+            int oldLen = dataSnap[idx] != null ? dataSnap[idx].length : sizeSnap[idx];
+            if (oldLen <= 0) continue;
+            dataSnap[idx] = null;
+            sizeSnap[idx] = 0;
+            offsetSnap[idx] = 0;
+            tsSnap[idx] = 0;
+            countSnap--;
+            totalBytesSnap -= oldLen;
+        }
+
+        return estimateSerializedFileSize(dataSnap, sizeSnap, offsetSnap, tsSnap, bodySnap, countSnap, totalBytesSnap);
+    }
+
     public boolean canEvictFromCache() {
         return !dirty && !flushing;
     }
@@ -944,6 +985,53 @@ public class LinearRegionFile {
                     "[LinearReader] Slow region save: r.{}.{}.linear took {}ms (threshold {}ms). " +
                             "Check disk health.", regionX, regionZ, elapsedMs, threshold);
         }
+    }
+
+    private int estimateSerializedFileSize(byte[][] dataSnap, int[] sizeSnap, int[] offsetSnap,
+                                           int[] tsSnap, @Nullable byte[] bodySnap,
+                                           int countSnap, long totalBytesSnap) throws IOException {
+        int compressionLevel = LinearConfig.getCompressionLevel();
+        int totalBytes = (int) Math.max(0L, totalBytesSnap);
+        int bodySize = INNER_HEADER_SIZE + totalBytes;
+
+        byte[][] bufs = TL_FLUSH_BUFS.get();
+        if (bufs[0] == null || bufs[0].length != bodySize) {
+            bufs[0] = new byte[bodySize];
+        }
+        byte[] body = bufs[0];
+
+        ByteBuffer bodyBuf = ByteBuffer.wrap(body, 0, bodySize);
+        for (int i = 0; i < CHUNK_COUNT; i++) {
+            int len = dataSnap[i] != null ? dataSnap[i].length : sizeSnap[i];
+            bodyBuf.putInt(len);
+            bodyBuf.putInt(tsSnap[i]);
+        }
+        for (int i = 0; i < CHUNK_COUNT; i++) {
+            byte[] direct = dataSnap[i];
+            if (direct != null) {
+                bodyBuf.put(direct);
+                continue;
+            }
+            int len = sizeSnap[i];
+            if (len > 0) {
+                if (bodySnap == null) {
+                    throw new IOException("[LinearReader] Missing loaded body while estimating " + path.getFileName());
+                }
+                bodyBuf.put(bodySnap, offsetSnap[i], len);
+            }
+        }
+
+        int maxCompLen = (int) Zstd.compressBound(bodySize);
+        if (bufs[1] == null || bufs[1].length < maxCompLen) {
+            bufs[1] = new byte[maxCompLen];
+        }
+        byte[] compressedBuf = bufs[1];
+
+        long compLen = Zstd.compress(compressedBuf, body, compressionLevel);
+        if (Zstd.isError(compLen)) {
+            throw new IOException("[LinearReader] Zstd compression error while estimating size: " + Zstd.getErrorName(compLen));
+        }
+        return 32 + (int) compLen + 8;
     }
 
     // -------------------------------------------------------------------------

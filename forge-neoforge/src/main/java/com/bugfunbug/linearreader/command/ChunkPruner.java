@@ -288,8 +288,6 @@ public final class ChunkPruner {
         long openMutationStart = openRegion != null ? openRegion.lastMutationTimeNs() : Long.MIN_VALUE;
         BitSet candidates = new BitSet(1024);
         int presentChunkCount = 0;
-        long candidateRawBytes = 0L;
-        long totalStoredChunkBytes = 0L;
         boolean ownsRegion = openRegion == null;
         LinearRegionFile region = ownsRegion ? new LinearRegionFile(regionPath, false) : openRegion;
 
@@ -301,7 +299,6 @@ public final class ChunkPruner {
                 int storedBytes = region.storedChunkBytes(localIndex);
                 if (storedBytes <= 0) continue;
                 presentChunkCount++;
-                totalStoredChunkBytes += storedBytes;
 
                 try (DataInputStream dis = region.read(pos)) {
                     if (dis == null) continue;
@@ -309,7 +306,6 @@ public final class ChunkPruner {
                     if (tag == null) continue;
                     if (isPrunableChunk(tag)) {
                         candidates.set(localIndex);
-                        candidateRawBytes += storedBytes;
                         if (sampleChunks.size() < MAX_SAMPLE_CHUNKS) {
                             sampleChunks.add(regionLabel + " @ chunk " + pos.x + ", " + pos.z);
                         }
@@ -334,7 +330,9 @@ public final class ChunkPruner {
             return RegionAnalysis.notBusy(null, presentChunkCount, 0L);
         }
 
-        long estimatedReclaimBytes = estimateCompressedReclaimBytes(Files.size(regionPath), totalStoredChunkBytes, candidateRawBytes);
+        long regionFileSize = Files.size(regionPath);
+        long estimatedFileSizeAfterPrune = region.estimateFileSizeAfterRemoving(candidates);
+        long estimatedReclaimBytes = Math.max(0L, regionFileSize - estimatedFileSizeAfterPrune);
 
         RegionPlan plan = new RegionPlan(
                 regionPath,
@@ -344,7 +342,7 @@ public final class ChunkPruner {
                 regionZ,
                 (BitSet) candidates.clone(),
                 candidates.cardinality(),
-                Files.size(regionPath),
+                regionFileSize,
                 lastModifiedMillis(regionPath),
                 estimatedReclaimBytes
         );
@@ -495,25 +493,15 @@ public final class ChunkPruner {
         return fileTime.toMillis();
     }
 
-    private static long estimateCompressedReclaimBytes(long regionFileBytes, long totalStoredChunkBytes, long candidateRawBytes) {
-        if (candidateRawBytes <= 0L || totalStoredChunkBytes <= 0L) return 0L;
-        long compressedBodyBytes = Math.max(0L, regionFileBytes - 40L);
-        long decompressedBodyBytes = 8192L + totalStoredChunkBytes;
-        if (compressedBodyBytes <= 0L || decompressedBodyBytes <= 0L) return 0L;
-        double ratio = (double) compressedBodyBytes / (double) decompressedBodyBytes;
-        long estimated = Math.round(candidateRawBytes * ratio);
-        return Math.max(0L, Math.min(estimated, compressedBodyBytes));
-    }
-
     private static String formatBytes(long bytes) {
-        if (bytes < 1024L) return bytes + " B";
+        if (bytes < 1000L) return bytes + " B";
         double value = bytes;
-        String[] units = {"KiB", "MiB", "GiB", "TiB"};
+        String[] units = {"KB", "MB", "GB", "TB"};
         int unitIndex = -1;
         do {
-            value /= 1024.0;
+            value /= 1000.0;
             unitIndex++;
-        } while (value >= 1024.0 && unitIndex < units.length - 1);
+        } while (value >= 1000.0 && unitIndex < units.length - 1);
         return String.format(java.util.Locale.ROOT, "%.2f %s", value, units[unitIndex]);
     }
 
