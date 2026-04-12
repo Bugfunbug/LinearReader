@@ -112,9 +112,9 @@ public final class DHPregenMonitor {
         return Math.max(configured, PREGEN_MIN_REGIONS_PER_TICK);
     }
 
-    /** {@code true} while a DH pregen session is active. */
+    /** {@code true} while DH or Chunky pregen is active. */
     public static boolean isPregenActive() {
-        return PREGEN_ACTIVE.get();
+        return PREGEN_ACTIVE.get() || CHUNKY_ACTIVE_TASKS.get() > 0;
     }
 
     // -------------------------------------------------------------------------
@@ -204,7 +204,7 @@ public final class DHPregenMonitor {
         final int rptNow   = Math.max(savedRegionsPerSaveTick, PREGEN_MIN_REGIONS_PER_TICK);
         final String trimmed = msg.trim();
 
-        if (current == 1 && !PREGEN_ACTIVE.get()) {
+        if (current == 1 && wasInactive) {
             // First activation overall — log full mode change
             logAsync("Chunky pregen started (\"" + trimmed + "\") — pregen-mode active. "
                     + "cacheSize " + cacheWas + " -> " + cacheNow
