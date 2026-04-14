@@ -2,7 +2,6 @@ package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearReader;
 import com.bugfunbug.linearreader.config.LinearConfig;
-import com.github.luben.zstd.Zstd;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -387,19 +386,19 @@ public final class IdleRecompressor {
         byte[] existingComp = new byte[compBodyLen];
         System.arraycopy(raw, 32, existingComp, 0, compBodyLen);
 
-        long expectedDecomp = Zstd.decompressedSize(existingComp);
+        long expectedDecomp = ZstdSupport.decompressedSize(existingComp);
         if (expectedDecomp <= 0 || expectedDecomp > Integer.MAX_VALUE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
         }
 
         byte[] body = new byte[(int) expectedDecomp];
-        long result = Zstd.decompress(body, existingComp);
-        if (Zstd.isError(result)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        long result = ZstdSupport.decompress(body, existingComp);
+        if (ZstdSupport.isError(result)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Recompress at target level.
-        byte[] newComp = new byte[(int) Zstd.compressBound(body.length)];
-        long   newLen  = Zstd.compress(newComp, body, targetLevel);
-        if (Zstd.isError(newLen)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        byte[] newComp = new byte[(int) ZstdSupport.compressBound(body.length)];
+        long   newLen  = ZstdSupport.compress(newComp, body, targetLevel);
+        if (ZstdSupport.isError(newLen)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // For in-place: don't write if it got larger (can happen with already-optimal data).
         if (src.equals(dst) && newLen >= compBodyLen) {

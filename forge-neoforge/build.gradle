@@ -15,13 +15,14 @@ base {
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 configurations {
-    embed
-    implementation.extendsFrom(embed)
+    zstdRuntime
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
-    embed 'com.github.luben:zstd-jni:1.5.5-11'
+    // Keep zstd-jni out of the mod module itself to avoid split-package crashes
+    // with other mods that also bundle com.github.luben.zstd.
+    zstdRuntime 'com.github.luben:zstd-jni:1.5.5-11'
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 
@@ -64,10 +65,12 @@ repositories {
 }
 
 jar {
-    // Unzip zstd-jni (classes + native .so/.dylib/.dll) directly into the mod jar.
-    // This is why you must NOT relocate — JNI looks up natives by exact path.
-    from {
-        configurations.embed.collect { it.isDirectory() ? it : zipTree(it) }
+    // Ship zstd-jni as a nested resource jar and load it through an isolated
+    // classloader at runtime. This keeps com.github.luben.zstd out of the
+    // Minecraft module layer while preserving the original JNI class names.
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 

@@ -3,7 +3,6 @@ package com.bugfunbug.linearreader.linear;
 import com.bugfunbug.linearreader.LinearReader;
 import com.bugfunbug.linearreader.LinearStats;
 import com.bugfunbug.linearreader.config.LinearConfig;
-import com.github.luben.zstd.Zstd;
 import net.minecraft.world.level.ChunkPos;
 
 import javax.annotation.Nullable;
@@ -811,14 +810,14 @@ public class LinearRegionFile {
         byte[] compressed = new byte[compressedBodyLength];
         System.arraycopy(raw, 32, compressed, 0, compressedBodyLength);
 
-        long expectedDecompSize = Zstd.decompressedSize(compressed);
+        long expectedDecompSize = ZstdSupport.decompressedSize(compressed);
         if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE)
             throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
 
         byte[] decompressed = new byte[(int) expectedDecompSize];
-        long result = Zstd.decompress(decompressed, compressed);
-        if (Zstd.isError(result))
-            throw new IOException("[LinearReader] Zstd error (" + Zstd.getErrorName(result) + ") in: " + src);
+        long result = ZstdSupport.decompress(decompressed, compressed);
+        if (ZstdSupport.isError(result))
+            throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
         if (result != expectedDecompSize)
             throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
 
@@ -933,14 +932,14 @@ public class LinearRegionFile {
             }
         }
 
-        int    maxCompLen    = (int) Zstd.compressBound(bodySize);
+        int    maxCompLen    = (int) ZstdSupport.compressBound(bodySize);
         if (bufs[1] == null || bufs[1].length < maxCompLen)
             bufs[1] = new byte[maxCompLen];
         byte[] compressedBuf = bufs[1];
 
-        long   compLen       = Zstd.compress(compressedBuf, body, compressionLevel);
-        if (Zstd.isError(compLen))
-            throw new IOException("[LinearReader] Zstd compression error: " + Zstd.getErrorName(compLen));
+        long   compLen       = ZstdSupport.compress(compressedBuf, body, compressionLevel);
+        if (ZstdSupport.isError(compLen))
+            throw new IOException("[LinearReader] Zstd compression error: " + ZstdSupport.getErrorName(compLen));
 
         CRC32 crc = TL_CRC32.get();
         crc.reset();
@@ -1021,15 +1020,15 @@ public class LinearRegionFile {
             }
         }
 
-        int maxCompLen = (int) Zstd.compressBound(bodySize);
+        int maxCompLen = (int) ZstdSupport.compressBound(bodySize);
         if (bufs[1] == null || bufs[1].length < maxCompLen) {
             bufs[1] = new byte[maxCompLen];
         }
         byte[] compressedBuf = bufs[1];
 
-        long compLen = Zstd.compress(compressedBuf, body, compressionLevel);
-        if (Zstd.isError(compLen)) {
-            throw new IOException("[LinearReader] Zstd compression error while estimating size: " + Zstd.getErrorName(compLen));
+        long compLen = ZstdSupport.compress(compressedBuf, body, compressionLevel);
+        if (ZstdSupport.isError(compLen)) {
+            throw new IOException("[LinearReader] Zstd compression error while estimating size: " + ZstdSupport.getErrorName(compLen));
         }
         return 32 + (int) compLen + 8;
     }
