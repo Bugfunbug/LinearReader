@@ -401,6 +401,7 @@ public class LinearReader {
         worldRoot = server.getWorldPath(LevelResource.ROOT);
         IdleRecompressor.startAutoDetector();
 
+        migrateLegacyBackups();
         loadPins();
 
         int recovered = 0, deleted = 0;
@@ -450,6 +451,78 @@ public class LinearReader {
         if (recovered > 0 || deleted > 0)
             LOGGER.info("[LinearReader] .wip recovery: {} recovered, {} deleted.",
                     recovered, deleted);
+    }
+
+    private void migrateLegacyBackups() {
+        int moved = 0;
+        int deduped = 0;
+        int conflicts = 0;
+
+        try (Stream<Path> stream = Files.walk(worldRoot)) {
+            Iterable<Path> paths = () -> stream
+                    .filter(Files::isRegularFile)
+                    .filter(LinearReader::isLegacyBackupFile)
+                    .iterator();
+            for (Path legacyPath : paths) {
+                Path canonicalPath = canonicalBackupPathForLegacy(legacyPath);
+                try {
+                    Path parent = canonicalPath.getParent();
+                    if (parent != null) {
+                        Files.createDirectories(parent);
+                    }
+
+                    if (!Files.exists(canonicalPath)) {
+                        Files.move(legacyPath, canonicalPath);
+                        moved++;
+                        continue;
+                    }
+
+                    if (Files.mismatch(legacyPath, canonicalPath) == -1L) {
+                        Files.delete(legacyPath);
+                        deduped++;
+                        continue;
+                    }
+
+                    Path conflictPath = canonicalPath.resolveSibling(
+                            canonicalPath.getFileName().toString() + ".legacy-conflict");
+                    Files.move(legacyPath, conflictPath, StandardCopyOption.REPLACE_EXISTING);
+                    conflicts++;
+                    LOGGER.warn("[LinearReader] Legacy backup conflict moved to {}",
+                            worldRoot.relativize(conflictPath));
+                } catch (IOException e) {
+                    LOGGER.warn("[LinearReader] Could not migrate legacy backup {}: {}",
+                            worldRoot.relativize(legacyPath), e.getMessage());
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.warn("[LinearReader] Could not scan for legacy backups: {}", e.getMessage());
+        }
+
+        if (moved > 0 || deduped > 0 || conflicts > 0) {
+            LOGGER.info("[LinearReader] Legacy backup migration: {} moved, {} deduped, {} conflicts.",
+                    moved, deduped, conflicts);
+        }
+    }
+
+    private static boolean isLegacyBackupFile(Path path) {
+        String fileName = path.getFileName().toString();
+        if (!fileName.endsWith(".linear.bak")) return false;
+
+        Path parent = path.getParent();
+        if (parent == null || parent.getFileName() == null) return true;
+
+        String parentName = parent.getFileName().toString();
+        return !"backups".equals(parentName) && !"corrupted".equals(parentName);
+    }
+
+    private static Path canonicalBackupPathForLegacy(Path legacyPath) {
+        String fileName = legacyPath.getFileName().toString();
+        String liveName = fileName.substring(0, fileName.length() - 4);
+        Path parent = legacyPath.getParent();
+        if (parent == null) {
+            return Path.of("backups").resolve(fileName);
+        }
+        return LinearRegionFile.backupPathFor(parent.resolve(liveName));
     }
 
     @SubscribeEvent

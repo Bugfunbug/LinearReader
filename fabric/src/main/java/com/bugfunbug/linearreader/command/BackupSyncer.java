@@ -306,6 +306,14 @@ public final class BackupSyncer {
     private static Path livePathForBackup(Path backupPath) {
         String fileName = backupPath.getFileName().toString();
         String liveName = fileName.substring(0, fileName.length() - 4);
+        Path parent = backupPath.getParent();
+        if (parent != null && parent.getFileName() != null
+                && "backups".equals(parent.getFileName().toString())) {
+            Path liveParent = parent.getParent();
+            if (liveParent != null) {
+                return liveParent.resolve(liveName);
+            }
+        }
         return backupPath.resolveSibling(liveName);
     }
 

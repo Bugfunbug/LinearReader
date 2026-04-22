@@ -1037,8 +1037,17 @@ public class LinearRegionFile {
     // Backup helpers
     // -------------------------------------------------------------------------
 
-    public static Path backupPathFor(Path linearPath) {
+    public static Path backupDirFor(Path linearPath) {
+        Path parent = linearPath.getParent();
+        return parent == null ? Path.of("backups") : parent.resolve("backups");
+    }
+
+    public static Path legacyBackupPathFor(Path linearPath) {
         return linearPath.resolveSibling(linearPath.getFileName() + ".bak");
+    }
+
+    public static Path backupPathFor(Path linearPath) {
+        return backupDirFor(linearPath).resolve(linearPath.getFileName() + ".bak");
     }
 
     public static void writeBackupCopy(Path linearPath) throws IOException {

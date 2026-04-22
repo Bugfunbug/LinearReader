@@ -426,6 +426,11 @@ public final class IdleRecompressor {
             return new RecompressResult(RecompressOutcome.UNSTABLE_SKIPPED, 0L);
         }
 
+        Path dstParent = dst.getParent();
+        if (dstParent != null) {
+            Files.createDirectories(dstParent);
+        }
+
         // Atomic rename. Use .recompress.wip so startup recovery ignores/deletes it
         // rather than treating it as a live .linear.wip to promote.
         Path wip = dst.resolveSibling(dst.getFileName() + ".recompress.wip");
