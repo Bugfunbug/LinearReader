@@ -352,13 +352,16 @@ public class LinearReader {
     // ── Config ────────────────────────────────────────────────────────────────
 
     private void onConfigLoad(ModConfigEvent.Loading event) {
-        if (event.getConfig().getSpec() == ForgeLinearConfig.SPEC)
+        if (event.getConfig().getSpec() == ForgeLinearConfig.SPEC) {
             ForgeLinearConfig.pushToLinearConfig();
+            ForgeLinearConfig.rewriteConfigFile();
+        }
     }
 
     private void onConfigReload(ModConfigEvent.Reloading event) {
         if (event.getConfig().getSpec() == ForgeLinearConfig.SPEC) {
             ForgeLinearConfig.pushToLinearConfig();
+            ForgeLinearConfig.rewriteConfigFile();
             LOGGER.info("[LinearReader] Config reloaded.");
         }
     }

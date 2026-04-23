@@ -4,7 +4,7 @@ package com.bugfunbug.linearreader.config;
  * Loader-agnostic config values for LinearReader.
  *
  * All mod logic reads from this class. Loader-specific implementations
- * (ForgeLinearConfig, FabricLinearConfig) push values in via update()
+ * (the shared Forge/NeoForge config bridge and FabricLinearConfig) push values in via update()
  * on load and whenever the config changes.
  *
  * Volatile fields ensure cross-thread visibility without locking —

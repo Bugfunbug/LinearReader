@@ -1,13 +1,20 @@
 package com.bugfunbug.linearreader.config;
 
+import com.bugfunbug.linearreader.LinearReader;
 import net.minecraftforge.common.ForgeConfigSpec;
-import net.minecraftforge.fml.event.config.ModConfigEvent;
+import net.minecraftforge.fml.loading.FMLPaths;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Forge-specific config registration for LinearReader.
+ * Shared Forge/NeoForge config registration for LinearReader.
  *
- * Owns the ForgeConfigSpec. Pushes current values into LinearConfig
- * on load and on change so all mod logic stays loader-agnostic.
+ * Owns the ForgeConfigSpec-backed config and pushes current values into
+ * LinearConfig on load and on change so all mod logic stays loader-agnostic.
  */
 public final class ForgeLinearConfig {
 
@@ -186,5 +193,96 @@ public final class ForgeLinearConfig {
                 IDLE_THRESHOLD_MINUTES.get(),
                 RECOMPRESS_MIN_FREE_RAM_PERCENT.get()
         );
+    }
+
+    public static void rewriteConfigFile() {
+        int pressureFlushMin = PRESSURE_FLUSH_MIN_DIRTY_REGIONS.get();
+        int pressureFlushMax = Math.max(pressureFlushMin, PRESSURE_FLUSH_MAX_DIRTY_REGIONS.get());
+
+        List<String> lines = new ArrayList<>();
+        lines.add("# LinearReader - server-side settings");
+        lines.add("");
+
+        addInt(lines, "compressionLevel", COMPRESSION_LEVEL.get(),
+                "Zstd level used for normal .linear writes. Range: 1-22.",
+                "4-6 = recommended for normal server use.",
+                "22 = slowest, smallest output and is used by the idle recompressor.");
+        addInt(lines, "regionCacheSize", REGION_CACHE_SIZE.get(),
+                "Maximum number of region files kept open in the cache.",
+                "Higher = faster repeated access across many regions.",
+                "Lower = less RAM use, but more cache misses and disk reads.");
+        addBool(lines, "backupEnabled", BACKUP_ENABLED.get(),
+                "Keep a .linear.bak in a backups/ folder next to each region file.");
+        addInt(lines, "backupMinChangedChunks", BACKUP_MIN_CHANGED_CHUNKS.get(),
+                "Minimum unique chunk changes since the last completed backup",
+                "before a refresh is allowed.");
+        addInt(lines, "backupMinChangedKb", BACKUP_MIN_CHANGED_KB.get(),
+                "Minimum changed payload volume (KB) since the last completed",
+                "backup before a refresh is allowed.");
+        addInt(lines, "backupMaxAgeMinutes", BACKUP_MAX_AGE_MINUTES.get(),
+                "Maximum age of a changed backup before it must be refreshed.",
+                "Only applies when backupEnabled = true.");
+        addInt(lines, "backupQuietSeconds", BACKUP_QUIET_SECONDS.get(),
+                "Region quiet time required before a backup refresh is allowed.",
+                "Set to 0 to disable the quiet-time check.");
+        addInt(lines, "regionsPerSaveTick", REGIONS_PER_SAVE_TICK.get(),
+                "Maximum dirty regions submitted to the background flush executor",
+                "per server tick during a world save.",
+                "Higher drains backlog faster, but increases save-time work.");
+        addInt(lines, "pressureFlushMinDirtyRegions", pressureFlushMin,
+                "Lower bound for the dynamic pressure-flush dirty-region target.",
+                "Smaller values make pressure flushing kick in more aggressively.");
+        addInt(lines, "pressureFlushMaxDirtyRegions", pressureFlushMax,
+                "Upper bound for the dynamic pressure-flush dirty-region target.",
+                "Larger values allow more backlog before pressure flushing ramps up.");
+        addInt(lines, "slowIoThresholdMs", SLOW_IO_THRESHOLD_MS.get(),
+                "Warn in the log if a region read or write takes longer than",
+                "this many milliseconds. Set to -1 to disable.");
+        addInt(lines, "diskSpaceWarnGb", DISK_SPACE_WARN_GB.get(),
+                "Warn before writing if free disk space falls below this value (GB).",
+                "Set to -1 to disable.");
+        addBool(lines, "autoRecompressEnabled", AUTO_RECOMPRESS_ENABLED.get(),
+                "Enable automatic idle recompression after the server has had",
+                "no chunk I/O for the configured threshold.",
+                "Manual /linearreader afk-compress still works when this is false.");
+        addInt(lines, "idleThresholdMinutes", IDLE_THRESHOLD_MINUTES.get(),
+                "Minutes with no chunk I/O before automatic recompression may start.",
+                "Only applies when autoRecompressEnabled = true.");
+        addInt(lines, "recompressMinFreeRamPercent", RECOMPRESS_MIN_FREE_RAM_PERCENT.get(),
+                "Minimum available JVM heap headroom required during recompression.",
+                "If the worker drops below this percent it pauses for a few minutes",
+                "before trying again.");
+
+        Path path = configPath();
+        try {
+            Files.createDirectories(path.getParent());
+            Files.write(path, lines);
+        } catch (IOException e) {
+            LinearReader.LOGGER.warn(
+                    "[LinearReader] Failed to rewrite Forge/NeoForge config {}: {}",
+                    path.getFileName(), e.getMessage());
+        }
+    }
+
+    private static Path configPath() {
+        return FMLPaths.CONFIGDIR.get().resolve("linearreader-server.toml");
+    }
+
+    private static void addBool(List<String> lines, String key, boolean value, String... comments) {
+        addComments(lines, comments);
+        lines.add(key + " = " + value);
+        lines.add("");
+    }
+
+    private static void addInt(List<String> lines, String key, int value, String... comments) {
+        addComments(lines, comments);
+        lines.add(key + " = " + value);
+        lines.add("");
+    }
+
+    private static void addComments(List<String> lines, String... comments) {
+        for (String comment : comments) {
+            lines.add("# " + comment);
+        }
     }
 }
