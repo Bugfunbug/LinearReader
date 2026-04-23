@@ -28,12 +28,24 @@ final class ZstdSupport {
         return bridge().compress(dst, src, level);
     }
 
+    static long compress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level) {
+        return bridge().compress(dst, dstOff, dstLen, src, srcOff, srcLen, level);
+    }
+
     static long decompressedSize(byte[] src) {
         return bridge().decompressedSize(src);
     }
 
+    static long decompressedSize(byte[] src, int srcOff, int srcLen) {
+        return bridge().decompressedSize(src, srcOff, srcLen);
+    }
+
     static long decompress(byte[] dst, byte[] src) {
         return bridge().decompress(dst, src);
+    }
+
+    static long decompress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen) {
+        return bridge().decompress(dst, dstOff, dstLen, src, srcOff, srcLen);
     }
 
     static boolean isError(long code) {
@@ -72,8 +84,15 @@ final class ZstdSupport {
                     loader,
                     zstdClass.getMethod("compressBound", long.class),
                     zstdClass.getMethod("compress", byte[].class, byte[].class, int.class),
+                    zstdClass.getMethod("compressByteArray",
+                            byte[].class, int.class, int.class,
+                            byte[].class, int.class, int.class, int.class),
                     zstdClass.getMethod("decompressedSize", byte[].class),
+                    zstdClass.getMethod("decompressedSize", byte[].class, int.class, int.class),
                     zstdClass.getMethod("decompress", byte[].class, byte[].class),
+                    zstdClass.getMethod("decompressByteArray",
+                            byte[].class, int.class, int.class,
+                            byte[].class, int.class, int.class),
                     zstdClass.getMethod("isError", long.class),
                     zstdClass.getMethod("getErrorName", long.class)
             );
@@ -101,23 +120,32 @@ final class ZstdSupport {
         private final URLClassLoader loader;
         private final Method compressBound;
         private final Method compress;
+        private final Method compressByteArray;
         private final Method decompressedSize;
+        private final Method decompressedSizeSlice;
         private final Method decompress;
+        private final Method decompressByteArray;
         private final Method isError;
         private final Method getErrorName;
 
         private Bridge(URLClassLoader loader,
                        Method compressBound,
                        Method compress,
+                       Method compressByteArray,
                        Method decompressedSize,
+                       Method decompressedSizeSlice,
                        Method decompress,
+                       Method decompressByteArray,
                        Method isError,
                        Method getErrorName) {
             this.loader = loader;
             this.compressBound = compressBound;
             this.compress = compress;
+            this.compressByteArray = compressByteArray;
             this.decompressedSize = decompressedSize;
+            this.decompressedSizeSlice = decompressedSizeSlice;
             this.decompress = decompress;
+            this.decompressByteArray = decompressByteArray;
             this.isError = isError;
             this.getErrorName = getErrorName;
         }
@@ -130,12 +158,24 @@ final class ZstdSupport {
             return invokeLong(compress, dst, src, level);
         }
 
+        private long compress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level) {
+            return invokeLong(compressByteArray, dst, dstOff, dstLen, src, srcOff, srcLen, level);
+        }
+
         private long decompressedSize(byte[] src) {
             return invokeLong(decompressedSize, src);
         }
 
+        private long decompressedSize(byte[] src, int srcOff, int srcLen) {
+            return invokeLong(decompressedSizeSlice, src, srcOff, srcLen);
+        }
+
         private long decompress(byte[] dst, byte[] src) {
             return invokeLong(decompress, dst, src);
+        }
+
+        private long decompress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen) {
+            return invokeLong(decompressByteArray, dst, dstOff, dstLen, src, srcOff, srcLen);
         }
 
         private boolean isError(long code) {

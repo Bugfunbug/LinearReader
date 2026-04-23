@@ -42,6 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -200,9 +201,10 @@ public class LinearReader {
     // O(1) membership check — ArrayDeque.contains() is O(n).
     private final Set<LinearRegionFile> queuedRegions =
             Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    private final AtomicInteger queuedFlushCount = new AtomicInteger(0);
+    private final AtomicInteger inFlightFlushCount = new AtomicInteger(0);
 
-    private static final java.util.concurrent.atomic.AtomicInteger FLUSH_THREAD_N =
-            new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final AtomicInteger FLUSH_THREAD_N = new AtomicInteger(0);
 
     private ExecutorService flushExecutor;
     private Set<LinearRegionFile> inFlightFlushes;
@@ -254,6 +256,8 @@ public class LinearReader {
     private void initExecutor() {
         flushQueue.clear();
         queuedRegions.clear();
+        queuedFlushCount.set(0);
+        inFlightFlushCount.set(0);
         tickCounter = 0;
         serverStartNs = System.nanoTime();
         inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
@@ -272,6 +276,28 @@ public class LinearReader {
      * Submits a region flush to the background executor.
      * Safe to call from any thread including c2me storage threads.
      */
+    public static int currentLiveCompressionLevel() {
+        int configured = LinearConfig.getCompressionLevel();
+        if (configured <= 1) return configured;
+
+        LinearReader instance = INSTANCE;
+        if (instance == null || instance.flushExecutor == null) return configured;
+
+        if (DHPregenMonitor.isPregenActive()) {
+            return Math.max(1, Math.min(configured, 2));
+        }
+
+        int pressure = instance.queuedFlushCount.get() + instance.inFlightFlushCount.get();
+        int flushRate = Math.max(1, DHPregenMonitor.effectiveRegionsPerSaveTick());
+        if (pressure >= Math.max(4, flushRate * 2)) {
+            return Math.max(1, configured - 2);
+        }
+        if (pressure >= Math.max(2, flushRate)) {
+            return Math.max(1, configured - 1);
+        }
+        return configured;
+    }
+
     public static void submitFlush(LinearRegionFile region) {
         LinearReader instance = INSTANCE;
         if (instance == null
@@ -288,6 +314,7 @@ public class LinearReader {
             return;
         }
         if (!instance.inFlightFlushes.add(region)) return;
+        instance.inFlightFlushCount.incrementAndGet();
         instance.flushExecutor.submit(() -> {
             try { region.flush(false); }
             catch (IOException e) {
@@ -295,6 +322,7 @@ public class LinearReader {
                         region, e.getMessage(), e);
             } finally {
                 instance.inFlightFlushes.remove(region);
+                instance.inFlightFlushCount.decrementAndGet();
                 LinearRegionFile.ALL_OPEN.remove(region);
                 region.releaseChunkData();
             }
@@ -533,6 +561,7 @@ public class LinearReader {
 
         flushQueue.clear();
         queuedRegions.clear();
+        queuedFlushCount.set(0);
 
         if (flushExecutor != null) {
             flushExecutor.shutdown();
@@ -607,6 +636,7 @@ public class LinearReader {
                     if (shouldQueueBackgroundFlush(region, nowNs)) {
                         if (queuedRegions.add(region)) {
                             flushQueue.add(region);
+                            queuedFlushCount.incrementAndGet();
                         }
                         continue;
                     }
@@ -623,6 +653,7 @@ public class LinearReader {
                         LinearRegionFile region = dirtyCandidates.get(i);
                         if (!queuedRegions.add(region)) continue;
                         flushQueue.add(region);
+                        queuedFlushCount.incrementAndGet();
                     }
                 }
             }
@@ -637,7 +668,9 @@ public class LinearReader {
             LinearRegionFile region = it.next();
             it.remove();
             queuedRegions.remove(region);
+            queuedFlushCount.decrementAndGet();
             if (!inFlightFlushes.add(region)) continue;
+            inFlightFlushCount.incrementAndGet();
             submitted++;
             flushExecutor.submit(() -> {
                 try { region.flush(false); }
@@ -646,6 +679,7 @@ public class LinearReader {
                             region, e.getMessage(), e);
                 } finally {
                     inFlightFlushes.remove(region);
+                    inFlightFlushCount.decrementAndGet();
                 }
             });
         }

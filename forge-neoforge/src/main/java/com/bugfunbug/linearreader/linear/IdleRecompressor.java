@@ -35,6 +35,7 @@ public final class IdleRecompressor {
     private IdleRecompressor() {}
 
     private static final long LINEAR_SIGNATURE = 0xc3ff13183cca9d9aL;
+    private static final ThreadLocal<CRC32> TL_CRC32 = ThreadLocal.withInitial(CRC32::new);
 
     /** Zstd level used during idle/AFK recompression. */
     public static final int  TARGET_LEVEL      = 22;
@@ -383,21 +384,19 @@ public final class IdleRecompressor {
         if (compBodyLen <= 0) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Decompress.
-        byte[] existingComp = new byte[compBodyLen];
-        System.arraycopy(raw, 32, existingComp, 0, compBodyLen);
-
-        long expectedDecomp = ZstdSupport.decompressedSize(existingComp);
+        long expectedDecomp = ZstdSupport.decompressedSize(raw, 32, compBodyLen);
         if (expectedDecomp <= 0 || expectedDecomp > Integer.MAX_VALUE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
         }
 
         byte[] body = new byte[(int) expectedDecomp];
-        long result = ZstdSupport.decompress(body, existingComp);
+        long result = ZstdSupport.decompress(body, 0, body.length, raw, 32, compBodyLen);
         if (ZstdSupport.isError(result)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Recompress at target level.
-        byte[] newComp = new byte[(int) ZstdSupport.compressBound(body.length)];
-        long   newLen  = ZstdSupport.compress(newComp, body, targetLevel);
+        int maxCompLen = (int) ZstdSupport.compressBound(body.length);
+        byte[] out = new byte[32 + maxCompLen + 8];
+        long   newLen  = ZstdSupport.compress(out, 32, maxCompLen, body, 0, body.length, targetLevel);
         if (ZstdSupport.isError(newLen)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // For in-place: don't write if it got larger (can happen with already-optimal data).
@@ -405,10 +404,10 @@ public final class IdleRecompressor {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
         }
 
-        CRC32 crc32 = new CRC32();
-        crc32.update(newComp, 0, (int) newLen);
+        CRC32 crc32 = TL_CRC32.get();
+        crc32.reset();
+        crc32.update(out, 32, (int) newLen);
 
-        byte[]     out    = new byte[32 + (int) newLen + 8];
         ByteBuffer outBuf = ByteBuffer.wrap(out);
         outBuf.putLong(LINEAR_SIGNATURE);
         outBuf.put(version);
@@ -417,7 +416,7 @@ public final class IdleRecompressor {
         outBuf.putShort(chunkCount);
         outBuf.putInt((int) newLen);
         outBuf.putLong(crc32.getValue());
-        outBuf.put(newComp, 0, (int) newLen);
+        outBuf.position(32 + (int) newLen);
         outBuf.putLong(LINEAR_SIGNATURE);
 
         // Only abort in-place recompression if the region is currently unstable.
@@ -434,7 +433,9 @@ public final class IdleRecompressor {
         // Atomic rename. Use .recompress.wip so startup recovery ignores/deletes it
         // rather than treating it as a live .linear.wip to promote.
         Path wip = dst.resolveSibling(dst.getFileName() + ".recompress.wip");
-        Files.write(wip, out);
+        try (java.io.OutputStream os = Files.newOutputStream(wip)) {
+            os.write(out, 0, 32 + (int) newLen + 8);
+        }
         try {
             Files.move(wip, dst,
                     StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

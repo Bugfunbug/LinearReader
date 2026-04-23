@@ -39,11 +39,22 @@ public final class LinearStats {
     public final LongAdder  regionLoadNs     = new LongAdder();
     public final AtomicLong minRegionLoadNs  = new AtomicLong(Long.MAX_VALUE);
     public final AtomicLong maxRegionLoadNs  = new AtomicLong(0);
+    public final LongAdder  regionLoadReadNs = new LongAdder();
+    public final LongAdder  regionLoadVerifyNs = new LongAdder();
+    public final LongAdder  regionLoadDecompressNs = new LongAdder();
+    public final LongAdder  regionLoadParseNs = new LongAdder();
 
     public final LongAdder  regionFlushes    = new LongAdder();
     public final LongAdder  regionFlushNs    = new LongAdder();
     public final AtomicLong minRegionFlushNs = new AtomicLong(Long.MAX_VALUE);
     public final AtomicLong maxRegionFlushNs = new AtomicLong(0);
+    public final LongAdder  regionFlushSnapshotNs = new LongAdder();
+    public final LongAdder  regionFlushBuildNs = new LongAdder();
+    public final LongAdder  regionFlushCompressNs = new LongAdder();
+    public final LongAdder  regionFlushChecksumNs = new LongAdder();
+    public final LongAdder  regionFlushWriteNs = new LongAdder();
+    public final LongAdder  regionFlushSyncNs = new LongAdder();
+    public final LongAdder  regionFlushRenameNs = new LongAdder();
 
     // ------------------------------------------------------------------
     // Compression  (recorded once per flush)
@@ -86,20 +97,34 @@ public final class LinearStats {
         updateMax(s.maxChunkWriteNs, elapsedNs);
     }
 
-    public static void recordRegionLoad(long elapsedNs) {
+    public static void recordRegionLoad(long elapsedNs, long readNs, long verifyNs,
+                                        long decompressNs, long parseNs) {
         LinearStats s = INSTANCE;
         s.regionLoads.increment();
         s.regionLoadNs.add(elapsedNs);
+        s.regionLoadReadNs.add(readNs);
+        s.regionLoadVerifyNs.add(verifyNs);
+        s.regionLoadDecompressNs.add(decompressNs);
+        s.regionLoadParseNs.add(parseNs);
         updateMin(s.minRegionLoadNs, elapsedNs);
         updateMax(s.maxRegionLoadNs, elapsedNs);
     }
 
-    public static void recordRegionFlush(long elapsedNs, long uncompressedBytes, long compressedBytes) {
+    public static void recordRegionFlush(long elapsedNs, long uncompressedBytes, long compressedBytes,
+                                         long snapshotNs, long buildNs, long compressNs,
+                                         long checksumNs, long writeNs, long syncNs, long renameNs) {
         LinearStats s = INSTANCE;
         s.regionFlushes.increment();
         s.regionFlushNs.add(elapsedNs);
         updateMin(s.minRegionFlushNs, elapsedNs);
         updateMax(s.maxRegionFlushNs, elapsedNs);
+        s.regionFlushSnapshotNs.add(snapshotNs);
+        s.regionFlushBuildNs.add(buildNs);
+        s.regionFlushCompressNs.add(compressNs);
+        s.regionFlushChecksumNs.add(checksumNs);
+        s.regionFlushWriteNs.add(writeNs);
+        s.regionFlushSyncNs.add(syncNs);
+        s.regionFlushRenameNs.add(renameNs);
         s.bytesUncompressed.add(uncompressedBytes);
         s.bytesCompressed.add(compressedBytes);
     }
@@ -125,9 +150,20 @@ public final class LinearStats {
 
         s.regionLoads.reset();    s.regionLoadNs.reset();
         s.minRegionLoadNs.set(Long.MAX_VALUE); s.maxRegionLoadNs.set(0);
+        s.regionLoadReadNs.reset();
+        s.regionLoadVerifyNs.reset();
+        s.regionLoadDecompressNs.reset();
+        s.regionLoadParseNs.reset();
 
         s.regionFlushes.reset();  s.regionFlushNs.reset();
         s.minRegionFlushNs.set(Long.MAX_VALUE); s.maxRegionFlushNs.set(0);
+        s.regionFlushSnapshotNs.reset();
+        s.regionFlushBuildNs.reset();
+        s.regionFlushCompressNs.reset();
+        s.regionFlushChecksumNs.reset();
+        s.regionFlushWriteNs.reset();
+        s.regionFlushSyncNs.reset();
+        s.regionFlushRenameNs.reset();
 
         s.bytesUncompressed.reset();
         s.bytesCompressed.reset();

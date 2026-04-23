@@ -277,6 +277,17 @@ public class LinearCommand {
         double wrapperHitPct = wTotal == 0 ? 0.0 : wHits * 100.0 / wTotal;
         double readTps = uptime > 0 ? cReads  / uptime : 0;
         double wrtTps  = uptime > 0 ? cWrites / uptime : 0;
+        double loadReadAvgMs = LinearStats.avgMs(s.regionLoadReadNs.sum(), rLoads);
+        double loadVerifyAvgMs = LinearStats.avgMs(s.regionLoadVerifyNs.sum(), rLoads);
+        double loadDecompressAvgMs = LinearStats.avgMs(s.regionLoadDecompressNs.sum(), rLoads);
+        double loadParseAvgMs = LinearStats.avgMs(s.regionLoadParseNs.sum(), rLoads);
+        double flushSnapshotAvgMs = LinearStats.avgMs(s.regionFlushSnapshotNs.sum(), rFlushes);
+        double flushBuildAvgMs = LinearStats.avgMs(s.regionFlushBuildNs.sum(), rFlushes);
+        double flushCompressAvgMs = LinearStats.avgMs(s.regionFlushCompressNs.sum(), rFlushes);
+        double flushChecksumAvgMs = LinearStats.avgMs(s.regionFlushChecksumNs.sum(), rFlushes);
+        double flushWriteAvgMs = LinearStats.avgMs(s.regionFlushWriteNs.sum(), rFlushes);
+        double flushSyncAvgMs = LinearStats.avgMs(s.regionFlushSyncNs.sum(), rFlushes);
+        double flushRenameAvgMs = LinearStats.avgMs(s.regionFlushRenameNs.sum(), rFlushes);
 
         String msg = "§6[LinearReader] Benchmark Report§8 (window: " + fmtUptime(uptime) + ")\n"
                 + "§7§l  ── Chunk I/O ──§r\n"
@@ -295,10 +306,21 @@ public class LinearCommand {
                 + "  avg §f" + String.format("%.1f", LinearStats.avgMs(s.regionLoadNs.sum(), rLoads))   + "ms"
                 + "  min §f" + String.format("%.1f", LinearStats.toMs(s.minRegionLoadNs.get()))          + "ms"
                 + "  max §f" + String.format("%.1f", LinearStats.toMs(s.maxRegionLoadNs.get()))          + "ms\n"
+                + "§8    phases avg: read " + String.format("%.1f", loadReadAvgMs)
+                + "  verify " + String.format("%.1f", loadVerifyAvgMs)
+                + "  zstd " + String.format("%.1f", loadDecompressAvgMs)
+                + "  parse " + String.format("%.1f", loadParseAvgMs) + " ms\n"
                 + "§7  Flushes: §f" + rFlushes
                 + "  avg §f" + String.format("%.1f", LinearStats.avgMs(s.regionFlushNs.sum(), rFlushes))+ "ms"
                 + "  min §f" + String.format("%.1f", LinearStats.toMs(s.minRegionFlushNs.get()))         + "ms"
                 + "  max §f" + String.format("%.1f", LinearStats.toMs(s.maxRegionFlushNs.get()))         + "ms\n"
+                + "§8    phases avg: snap " + String.format("%.1f", flushSnapshotAvgMs)
+                + "  build " + String.format("%.1f", flushBuildAvgMs)
+                + "  zstd " + String.format("%.1f", flushCompressAvgMs)
+                + "  crc " + String.format("%.1f", flushChecksumAvgMs)
+                + "  write " + String.format("%.1f", flushWriteAvgMs)
+                + "  sync " + String.format("%.1f", flushSyncAvgMs)
+                + "  rename " + String.format("%.1f", flushRenameAvgMs) + " ms\n"
                 + "§7§l  ── Compression ──§r\n"
                 + "§7  Uncompressed: §f" + fmtSize(uncomp)
                 + "  §7Compressed: §f" + fmtSize(comp)

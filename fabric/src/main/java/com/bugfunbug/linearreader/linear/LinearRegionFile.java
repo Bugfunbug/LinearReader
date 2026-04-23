@@ -61,7 +61,7 @@ public class LinearRegionFile {
     // Reusable byte-array buffers per flush thread — dramatically reduces GC pressure
     // under heavy worldgen where flushes happen constantly.
     private static final ThreadLocal<byte[][]> TL_FLUSH_BUFS =
-            ThreadLocal.withInitial(() -> new byte[3][]);
+            ThreadLocal.withInitial(() -> new byte[2][]);
 
     // Throttle the disk-space syscall to at most once per minute per flush thread.
     private static final ThreadLocal<Long> TL_LAST_DISK_CHECK =
@@ -581,6 +581,7 @@ public class LinearRegionFile {
     public void flush(boolean allowBackup) throws IOException {
         if (!dirty) return; // fast volatile read before acquiring any lock
 
+        final long snapshotStartNs = System.nanoTime();
         final byte[][] dataSnap;
         final int[]    sizeSnap;
         final int[]    offsetSnap;
@@ -610,8 +611,9 @@ public class LinearRegionFile {
         try {
             boolean ioOk = false;
             try {
+                long snapshotNs = System.nanoTime() - snapshotStartNs;
                 writeToDisk(dataSnap, sizeSnap, offsetSnap, tsSnap, bodySnap,
-                        newestTsSnap, countSnap, totalBytesSnap);
+                        newestTsSnap, countSnap, totalBytesSnap, snapshotNs);
                 ioOk = true;
                 lastSuccessfulFlushNs = System.nanoTime();
             } finally {
@@ -772,12 +774,13 @@ public class LinearRegionFile {
 
     private void loadFromDisk(Path src) throws IOException {
         long startNs = System.nanoTime();
-
         byte[] raw = Files.readAllBytes(src);
+        long readNs = System.nanoTime() - startNs;
 
         if (raw.length < 40)
             throw new IOException("[LinearReader] File too short (" + raw.length + " bytes): " + src);
 
+        long verifyStartNs = System.nanoTime();
         ByteBuffer hdr    = ByteBuffer.wrap(raw, 0, 32);
         long  sig         = hdr.getLong();
         byte  version     = hdr.get();
@@ -806,24 +809,27 @@ public class LinearRegionFile {
                 throw new IOException("[LinearReader] CRC32 checksum mismatch in: " + src
                         + " (expected " + storedCRC + ", got " + crc.getValue() + ")");
         }
+        long verifyNs = System.nanoTime() - verifyStartNs;
 
-        byte[] compressed = new byte[compressedBodyLength];
-        System.arraycopy(raw, 32, compressed, 0, compressedBodyLength);
-
-        long expectedDecompSize = ZstdSupport.decompressedSize(compressed);
+        long decompressStartNs = System.nanoTime();
+        long expectedDecompSize = ZstdSupport.decompressedSize(raw, 32, compressedBodyLength);
         if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE)
             throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
 
         byte[] decompressed = new byte[(int) expectedDecompSize];
-        long result = ZstdSupport.decompress(decompressed, compressed);
+        long result = ZstdSupport.decompress(
+                decompressed, 0, decompressed.length,
+                raw, 32, compressedBodyLength);
         if (ZstdSupport.isError(result))
             throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
         if (result != expectedDecompSize)
             throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
+        long decompressNs = System.nanoTime() - decompressStartNs;
 
         if (decompressed.length < INNER_HEADER_SIZE)
             throw new IOException("[LinearReader] Decompressed body too short in: " + src);
 
+        long parseStartNs = System.nanoTime();
         ByteBuffer inner  = ByteBuffer.wrap(decompressed, 0, INNER_HEADER_SIZE);
         int        totalSz    = 0;
         int        realCount  = 0;
@@ -855,10 +861,11 @@ public class LinearRegionFile {
         this.newestTimestamp = newestTs;
         this.chunkCount      = realCount;
         this.totalDataBytes  = totalSz;
+        long parseNs = System.nanoTime() - parseStartNs;
 
         long elapsedNs = System.nanoTime() - startNs;
         long elapsedMs = elapsedNs / 1_000_000L;
-        LinearStats.recordRegionLoad(elapsedNs);
+        LinearStats.recordRegionLoad(elapsedNs, readNs, verifyNs, decompressNs, parseNs);
         int  threshold = LinearConfig.getSlowIoThresholdMs();
         if (threshold >= 0 && elapsedMs > threshold) {
             LinearReader.LOGGER.warn(
@@ -876,7 +883,8 @@ public class LinearRegionFile {
      */
     private void writeToDisk(byte[][] dataSnap, int[] sizeSnap, int[] offsetSnap,
                              int[] tsSnap, @Nullable byte[] bodySnap,
-                             long newestTsSnap, int countSnap, long totalBytesSnap)
+                             long newestTsSnap, int countSnap, long totalBytesSnap,
+                             long snapshotNs)
             throws IOException {
 
         Files.createDirectories(path.getParent());
@@ -901,16 +909,17 @@ public class LinearRegionFile {
         }
 
         long startNs = System.nanoTime();
-        int compressionLevel = LinearConfig.getCompressionLevel();
+        int compressionLevel = LinearReader.currentLiveCompressionLevel();
 
         int totalBytes = (int) totalBytesSnap;
         int bodySize   = INNER_HEADER_SIZE + totalBytes;
 
         byte[][] bufs = TL_FLUSH_BUFS.get();
-        if (bufs[0] == null || bufs[0].length != bodySize)
+        if (bufs[0] == null || bufs[0].length < bodySize)
             bufs[0] = new byte[bodySize];
         byte[] body = bufs[0];
 
+        long buildStartNs = System.nanoTime();
         ByteBuffer bodyBuf = ByteBuffer.wrap(body, 0, bodySize);
         for (int i = 0; i < CHUNK_COUNT; i++) {
             int len = dataSnap[i] != null ? dataSnap[i].length : sizeSnap[i];
@@ -931,25 +940,28 @@ public class LinearRegionFile {
                 bodyBuf.put(bodySnap, offsetSnap[i], len);
             }
         }
+        long buildNs = System.nanoTime() - buildStartNs;
 
         int    maxCompLen    = (int) ZstdSupport.compressBound(bodySize);
-        if (bufs[1] == null || bufs[1].length < maxCompLen)
-            bufs[1] = new byte[maxCompLen];
-        byte[] compressedBuf = bufs[1];
+        int outCapacity = 32 + maxCompLen + 8;
+        if (bufs[1] == null || bufs[1].length < outCapacity)
+            bufs[1] = new byte[outCapacity];
+        byte[] out = bufs[1];
 
-        long   compLen       = ZstdSupport.compress(compressedBuf, body, compressionLevel);
+        long compressStartNs = System.nanoTime();
+        long   compLen       = ZstdSupport.compress(out, 32, maxCompLen, body, 0, bodySize, compressionLevel);
         if (ZstdSupport.isError(compLen))
             throw new IOException("[LinearReader] Zstd compression error: " + ZstdSupport.getErrorName(compLen));
+        long compressNs = System.nanoTime() - compressStartNs;
 
+        long checksumStartNs = System.nanoTime();
         CRC32 crc = TL_CRC32.get();
         crc.reset();
-        crc.update(compressedBuf, 0, (int) compLen);
+        crc.update(out, 32, (int) compLen);
         long checksum = crc.getValue();
+        long checksumNs = System.nanoTime() - checksumStartNs;
 
         int outLen = 32 + (int) compLen + 8;
-        if (bufs[2] == null || bufs[2].length < outLen)
-            bufs[2] = new byte[outLen];
-        byte[] out = bufs[2];
         ByteBuffer outBuf = ByteBuffer.wrap(out, 0, outLen);
         outBuf.putLong(LINEAR_SIGNATURE);
         outBuf.put(LINEAR_VERSION);
@@ -958,26 +970,36 @@ public class LinearRegionFile {
         outBuf.putShort((short) countSnap);
         outBuf.putInt((int) compLen);
         outBuf.putLong(checksum);
-        outBuf.put(compressedBuf, 0, (int) compLen);
+        outBuf.position(32 + (int) compLen);
         outBuf.putLong(LINEAR_SIGNATURE);
 
         Path wip = path.resolveSibling(path.getFileName() + ".wip");
+        long writeNs = 0L;
+        long syncNs = 0L;
         try (FileOutputStream fos = new FileOutputStream(wip.toFile())) {
+            long writeStartNs = System.nanoTime();
             fos.write(out, 0, outLen);
+            writeNs = System.nanoTime() - writeStartNs;
             if (dsync) {
+                long syncStartNs = System.nanoTime();
                 fos.getFD().sync();
+                syncNs = System.nanoTime() - syncStartNs;
             }
         }
 
+        long renameStartNs = System.nanoTime();
         try {
             Files.move(wip, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
             Files.move(wip, path, StandardCopyOption.REPLACE_EXISTING);
         }
+        long renameNs = System.nanoTime() - renameStartNs;
 
-        long elapsedNs = System.nanoTime() - startNs;
+        long elapsedNs = snapshotNs + (System.nanoTime() - startNs);
         long elapsedMs = elapsedNs / 1_000_000L;
-        LinearStats.recordRegionFlush(elapsedNs, bodySize, compLen);
+        LinearStats.recordRegionFlush(
+                elapsedNs, bodySize, compLen,
+                snapshotNs, buildNs, compressNs, checksumNs, writeNs, syncNs, renameNs);
         int  threshold = LinearConfig.getSlowIoThresholdMs();
         if (threshold >= 0 && elapsedMs > threshold) {
             LinearReader.LOGGER.warn(
@@ -994,7 +1016,7 @@ public class LinearRegionFile {
         int bodySize = INNER_HEADER_SIZE + totalBytes;
 
         byte[][] bufs = TL_FLUSH_BUFS.get();
-        if (bufs[0] == null || bufs[0].length != bodySize) {
+        if (bufs[0] == null || bufs[0].length < bodySize) {
             bufs[0] = new byte[bodySize];
         }
         byte[] body = bufs[0];
