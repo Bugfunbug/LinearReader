@@ -10,8 +10,8 @@ package com.bugfunbug.linearreader.config;
  */
 public class FabricLinearConfig {
 
-    /** Zstd level used for normal .linear writes. 2-4 is the usual sweet spot. */
-    public int compressionLevel = 2;
+    /** Zstd level used for normal .linear writes. 4-6 is the usual sweet spot. */
+    public int compressionLevel = 4;
 
     /** Region files kept open in the cache. Higher is faster, lower uses less RAM. */
     public int regionCacheSize = 256;

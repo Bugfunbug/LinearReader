@@ -18,7 +18,7 @@ public final class LinearConfig {
     // Live values — read by all mod code
     // -------------------------------------------------------------------------
 
-    private static volatile int     compressionLevel     = 2;
+    private static volatile int     compressionLevel     = 4;
     private static volatile int     regionCacheSize      = 256;
     private static volatile boolean backupEnabled        = true;
     private static volatile int     backupUpdateInterval = 10;

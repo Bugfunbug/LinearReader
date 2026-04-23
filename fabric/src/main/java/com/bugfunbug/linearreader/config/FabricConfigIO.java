@@ -62,7 +62,7 @@ public final class FabricConfigIO {
 
         addInt(lines, "compressionLevel", config.compressionLevel,
                 "Zstd level used for normal .linear writes. Range: 1-22.",
-                "2-4 = recommended for normal server use.",
+                "4-6 = recommended for normal server use.",
                 "22 = slowest, smallest output and is used by the idle recompressor.");
         addInt(lines, "regionCacheSize", config.regionCacheSize,
                 "Maximum number of region files kept open in the cache.",

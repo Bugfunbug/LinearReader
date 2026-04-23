@@ -35,11 +35,11 @@ public final class ForgeLinearConfig {
         COMPRESSION_LEVEL = builder
                 .comment(
                         "Zstd level used for normal .linear writes. Range: 1-22.",
-                        "2-4 = recommended for normal server use.",
+                        "4-6 = recommended for normal server use.",
                         "22 = slowest, smallest output and is used by the idle recompressor.",
-                        "Default = 2"
+                        "Default = 4"
                 )
-                .defineInRange("compressionLevel", 2, 1, 22);
+                .defineInRange("compressionLevel", 4, 1, 22);
 
         REGION_CACHE_SIZE = builder
                 .comment(
