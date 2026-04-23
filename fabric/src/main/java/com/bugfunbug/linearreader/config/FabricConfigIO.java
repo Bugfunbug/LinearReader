@@ -69,12 +69,19 @@ public final class FabricConfigIO {
                 "Higher = faster repeated access across many regions.",
                 "Lower = less RAM use, but more cache misses and disk reads.");
         addBool(lines, "backupEnabled", config.backupEnabled,
-                "Keep a .linear.bak beside each region file.",
-                "A backup is created on first load and refreshed every",
-                "backupUpdateInterval successful saves.");
-        addInt(lines, "backupUpdateInterval", config.backupUpdateInterval,
-                "Successful saves of a region before its .bak is refreshed.",
+                "Keep a .linear.bak in a backups/ folder next to each region file.");
+        addInt(lines, "backupMinChangedChunks", config.backupMinChangedChunks,
+                "Minimum unique chunk changes since the last completed backup",
+                "before a refresh is allowed.");
+        addInt(lines, "backupMinChangedKb", config.backupMinChangedKb,
+                "Minimum changed payload volume (KB) since the last completed",
+                "backup before a refresh is allowed.");
+        addInt(lines, "backupMaxAgeMinutes", config.backupMaxAgeMinutes,
+                "Maximum age of a changed backup before it must be refreshed.",
                 "Only applies when backupEnabled = true.");
+        addInt(lines, "backupQuietSeconds", config.backupQuietSeconds,
+                "Region quiet time required before a backup refresh is allowed.",
+                "Set to 0 to disable the quiet-time check.");
         addInt(lines, "regionsPerSaveTick", config.regionsPerSaveTick,
                 "Maximum dirty regions submitted to the background flush executor",
                 "per server tick during a world save.",
@@ -132,7 +139,10 @@ public final class FabricConfigIO {
                     case "compressionLevel" -> config.compressionLevel = parseInt(key, value, config.compressionLevel);
                     case "regionCacheSize" -> config.regionCacheSize = parseInt(key, value, config.regionCacheSize);
                     case "backupEnabled" -> config.backupEnabled = parseBoolean(key, value, config.backupEnabled);
-                    case "backupUpdateInterval" -> config.backupUpdateInterval = parseInt(key, value, config.backupUpdateInterval);
+                    case "backupMinChangedChunks" -> config.backupMinChangedChunks = parseInt(key, value, config.backupMinChangedChunks);
+                    case "backupMinChangedKb" -> config.backupMinChangedKb = parseInt(key, value, config.backupMinChangedKb);
+                    case "backupMaxAgeMinutes" -> config.backupMaxAgeMinutes = parseInt(key, value, config.backupMaxAgeMinutes);
+                    case "backupQuietSeconds" -> config.backupQuietSeconds = parseInt(key, value, config.backupQuietSeconds);
                     case "regionsPerSaveTick" -> config.regionsPerSaveTick = parseInt(key, value, config.regionsPerSaveTick);
                     case "pressureFlushMinDirtyRegions" -> config.pressureFlushMinDirtyRegions = parseInt(key, value, config.pressureFlushMinDirtyRegions);
                     case "pressureFlushMaxDirtyRegions" -> config.pressureFlushMaxDirtyRegions = parseInt(key, value, config.pressureFlushMaxDirtyRegions);

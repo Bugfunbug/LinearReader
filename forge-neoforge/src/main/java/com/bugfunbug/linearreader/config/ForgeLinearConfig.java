@@ -18,7 +18,10 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.IntValue     COMPRESSION_LEVEL;
     private static final ForgeConfigSpec.IntValue     REGION_CACHE_SIZE;
     private static final ForgeConfigSpec.BooleanValue BACKUP_ENABLED;
-    private static final ForgeConfigSpec.IntValue     BACKUP_UPDATE_INTERVAL;
+    private static final ForgeConfigSpec.IntValue     BACKUP_MIN_CHANGED_CHUNKS;
+    private static final ForgeConfigSpec.IntValue     BACKUP_MIN_CHANGED_KB;
+    private static final ForgeConfigSpec.IntValue     BACKUP_MAX_AGE_MINUTES;
+    private static final ForgeConfigSpec.IntValue     BACKUP_QUIET_SECONDS;
     private static final ForgeConfigSpec.IntValue     REGIONS_PER_SAVE_TICK;
     private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MIN_DIRTY_REGIONS;
     private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MAX_DIRTY_REGIONS;
@@ -52,18 +55,41 @@ public final class ForgeLinearConfig {
 
         BACKUP_ENABLED = builder
                 .comment(
-                        "Keep a .linear.bak beside each region file.",
-                        "A backup is created on first load and refreshed every",
-                        "backupUpdateInterval successful saves."
+                        "Keep a .linear.bak in a backups/ folder next to each region file."
                 )
                 .define("backupEnabled", true);
 
-        BACKUP_UPDATE_INTERVAL = builder
+        BACKUP_MIN_CHANGED_CHUNKS = builder
                 .comment(
-                        "Successful saves of a region before its .bak is refreshed.",
-                        "Only applies when backupEnabled = true."
+                        "Minimum unique chunk changes since the last completed backup",
+                        "before a refresh is allowed.",
+                        "Default = 32"
                 )
-                .defineInRange("backupUpdateInterval", 10, 1, 100);
+                .defineInRange("backupMinChangedChunks", 32, 1, 1024);
+
+        BACKUP_MIN_CHANGED_KB = builder
+                .comment(
+                        "Minimum changed payload volume (KB) since the last completed",
+                        "backup before a refresh is allowed.",
+                        "Default = 2048"
+                )
+                .defineInRange("backupMinChangedKb", 2048, 64, 262144);
+
+        BACKUP_MAX_AGE_MINUTES = builder
+                .comment(
+                        "Maximum age of a changed backup before it must be refreshed.",
+                        "Only applies when backupEnabled = true.",
+                        "Default = 30"
+                )
+                .defineInRange("backupMaxAgeMinutes", 30, 1, 10080);
+
+        BACKUP_QUIET_SECONDS = builder
+                .comment(
+                        "Region quiet time required before a backup refresh is allowed.",
+                        "Set to 0 to disable the quiet-time check.",
+                        "Default = 60"
+                )
+                .defineInRange("backupQuietSeconds", 60, 0, 3600);
 
         REGIONS_PER_SAVE_TICK = builder
                 .comment(
@@ -147,7 +173,10 @@ public final class ForgeLinearConfig {
                 COMPRESSION_LEVEL.get(),
                 REGION_CACHE_SIZE.get(),
                 BACKUP_ENABLED.get(),
-                BACKUP_UPDATE_INTERVAL.get(),
+                BACKUP_MIN_CHANGED_CHUNKS.get(),
+                BACKUP_MIN_CHANGED_KB.get(),
+                BACKUP_MAX_AGE_MINUTES.get(),
+                BACKUP_QUIET_SECONDS.get(),
                 REGIONS_PER_SAVE_TICK.get(),
                 pressureFlushMin,
                 pressureFlushMax,

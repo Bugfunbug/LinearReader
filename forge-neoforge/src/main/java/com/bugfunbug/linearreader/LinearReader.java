@@ -303,7 +303,7 @@ public class LinearReader {
         if (instance == null
                 || instance.flushExecutor == null
                 || instance.flushExecutor.isShutdown()) {
-            try { region.flush(false); }
+            try { region.flush(true); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -316,7 +316,7 @@ public class LinearReader {
         if (!instance.inFlightFlushes.add(region)) return;
         instance.inFlightFlushCount.incrementAndGet();
         instance.flushExecutor.submit(() -> {
-            try { region.flush(false); }
+            try { region.flush(true); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -673,7 +673,7 @@ public class LinearReader {
             inFlightFlushCount.incrementAndGet();
             submitted++;
             flushExecutor.submit(() -> {
-                try { region.flush(false); }
+                try { region.flush(true); }
                 catch (IOException e) {
                     LOGGER.error("[LinearReader] Async flush failed for {}: {}",
                             region, e.getMessage(), e);

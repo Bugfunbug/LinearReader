@@ -297,7 +297,7 @@ public class LinearReader implements ModInitializer {
         if (instance == null
                 || instance.flushExecutor == null
                 || instance.flushExecutor.isShutdown()) {
-            try { region.flush(false); }
+            try { region.flush(true); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Fallback flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -310,7 +310,7 @@ public class LinearReader implements ModInitializer {
         if (!instance.inFlightFlushes.add(region)) return;
         instance.inFlightFlushCount.incrementAndGet();
         instance.flushExecutor.submit(() -> {
-            try { region.flush(false); }
+            try { region.flush(true); }
             catch (IOException e) {
                 LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
                         region, e.getMessage(), e);
@@ -347,7 +347,10 @@ public class LinearReader implements ModInitializer {
                 cfg.compressionLevel,
                 cfg.regionCacheSize,
                 cfg.backupEnabled,
-                cfg.backupUpdateInterval,
+                cfg.backupMinChangedChunks,
+                cfg.backupMinChangedKb,
+                cfg.backupMaxAgeMinutes,
+                cfg.backupQuietSeconds,
                 cfg.regionsPerSaveTick,
                 cfg.pressureFlushMinDirtyRegions,
                 cfg.pressureFlushMaxDirtyRegions,
@@ -630,7 +633,7 @@ public class LinearReader implements ModInitializer {
             inFlightFlushCount.incrementAndGet();
             submitted++;
             flushExecutor.submit(() -> {
-                try { region.flush(false); }
+                try { region.flush(true); }
                 catch (IOException e) {
                     LOGGER.error("[LinearReader] Async flush failed for {}: {}",
                             region, e.getMessage(), e);

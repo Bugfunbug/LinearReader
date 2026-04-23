@@ -21,7 +21,10 @@ public final class LinearConfig {
     private static volatile int     compressionLevel     = 4;
     private static volatile int     regionCacheSize      = 256;
     private static volatile boolean backupEnabled        = true;
-    private static volatile int     backupUpdateInterval = 10;
+    private static volatile int     backupMinChangedChunks = 32;
+    private static volatile int     backupMinChangedKb = 2048;
+    private static volatile int     backupMaxAgeMinutes = 30;
+    private static volatile int     backupQuietSeconds = 60;
     private static volatile int     regionsPerSaveTick   = 4;
     private static volatile int     pressureFlushMinDirtyRegions = 4;
     private static volatile int     pressureFlushMaxDirtyRegions = 16;
@@ -38,7 +41,10 @@ public final class LinearConfig {
     public static int     getCompressionLevel()     { return compressionLevel; }
     public static int     getRegionCacheSize()      { return regionCacheSize; }
     public static boolean isBackupEnabled()         { return backupEnabled; }
-    public static int     getBackupUpdateInterval() { return backupUpdateInterval; }
+    public static int     getBackupMinChangedChunks() { return backupMinChangedChunks; }
+    public static long    getBackupMinChangedBytes()  { return backupMinChangedKb * 1024L; }
+    public static int     getBackupMaxAgeMinutes()    { return backupMaxAgeMinutes; }
+    public static int     getBackupQuietSeconds()     { return backupQuietSeconds; }
     public static int     getRegionsPerSaveTick()   { return regionsPerSaveTick; }
     public static int     getPressureFlushMinDirtyRegions() { return pressureFlushMinDirtyRegions; }
     public static int     getPressureFlushMaxDirtyRegions() { return pressureFlushMaxDirtyRegions; }
@@ -56,7 +62,10 @@ public final class LinearConfig {
             int     compressionLevel,
             int     regionCacheSize,
             boolean backupEnabled,
-            int     backupUpdateInterval,
+            int     backupMinChangedChunks,
+            int     backupMinChangedKb,
+            int     backupMaxAgeMinutes,
+            int     backupQuietSeconds,
             int     regionsPerSaveTick,
             int     pressureFlushMinDirtyRegions,
             int     pressureFlushMaxDirtyRegions,
@@ -69,7 +78,10 @@ public final class LinearConfig {
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
         LinearConfig.backupEnabled        = backupEnabled;
-        LinearConfig.backupUpdateInterval = backupUpdateInterval;
+        LinearConfig.backupMinChangedChunks = backupMinChangedChunks;
+        LinearConfig.backupMinChangedKb = backupMinChangedKb;
+        LinearConfig.backupMaxAgeMinutes = backupMaxAgeMinutes;
+        LinearConfig.backupQuietSeconds = backupQuietSeconds;
         LinearConfig.regionsPerSaveTick   = regionsPerSaveTick;
         LinearConfig.pressureFlushMinDirtyRegions = pressureFlushMinDirtyRegions;
         LinearConfig.pressureFlushMaxDirtyRegions = Math.max(

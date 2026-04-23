@@ -16,11 +16,20 @@ public class FabricLinearConfig {
     /** Region files kept open in the cache. Higher is faster, lower uses less RAM. */
     public int regionCacheSize = 256;
 
-    /** Keep a .linear.bak beside each region file and refresh it periodically. */
+    /** Keep a .linear.bak in a backups/ folder next to each region file. */
     public boolean backupEnabled = true;
 
-    /** Successful saves between backup refreshes when backups are enabled. */
-    public int backupUpdateInterval = 10;
+    /** Minimum unique chunk changes since the last completed backup before a refresh is allowed. */
+    public int backupMinChangedChunks = 32;
+
+    /** Minimum changed payload volume since the last completed backup before a refresh is allowed. */
+    public int backupMinChangedKb = 2048;
+
+    /** Maximum age of a changed backup before it must be refreshed. */
+    public int backupMaxAgeMinutes = 30;
+
+    /** Region quiet time required before a backup refresh is allowed. */
+    public int backupQuietSeconds = 60;
 
     /** Dirty regions submitted to the flush executor per server tick during world saves. */
     public int regionsPerSaveTick = 4;
@@ -49,7 +58,10 @@ public class FabricLinearConfig {
     public void validate() {
         compressionLevel     = clamp(compressionLevel,     1,  22);
         regionCacheSize      = clamp(regionCacheSize,      8,  1024);
-        backupUpdateInterval = clamp(backupUpdateInterval, 1,  100);
+        backupMinChangedChunks = clamp(backupMinChangedChunks, 1, 1024);
+        backupMinChangedKb = clamp(backupMinChangedKb, 64, 262144);
+        backupMaxAgeMinutes = clamp(backupMaxAgeMinutes, 1, 10080);
+        backupQuietSeconds = clamp(backupQuietSeconds, 0, 3600);
         regionsPerSaveTick   = clamp(regionsPerSaveTick,   1,  64);
         pressureFlushMinDirtyRegions = clamp(pressureFlushMinDirtyRegions, 1, 64);
         pressureFlushMaxDirtyRegions = clamp(pressureFlushMaxDirtyRegions, 1, 128);
