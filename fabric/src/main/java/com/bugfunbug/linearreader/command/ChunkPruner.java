@@ -20,6 +20,7 @@ import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -109,6 +110,7 @@ public final class ChunkPruner {
 
     private static void runDryRun(CommandSourceStack source, MinecraftServer server, Path worldRoot) {
         long scannedAtNs = System.nanoTime();
+        PlayerContext playerContext = playerContextFor(source, worldRoot);
         List<Path> regionFiles = findChunkRegionFiles(worldRoot);
         if (regionFiles.isEmpty()) {
             send(source, "§e[LinearReader] No chunk-region .linear files were found.");
@@ -117,7 +119,6 @@ public final class ChunkPruner {
         }
 
         List<RegionPlan> plans = new ArrayList<>();
-        List<String> sampleChunks = new ArrayList<>();
         int skippedBusyRegions = 0;
         int failedRegions = 0;
         int scannedPresentChunks = 0;
@@ -126,7 +127,7 @@ public final class ChunkPruner {
         for (Path regionPath : regionFiles) {
             RegionAnalysis analysis;
             try {
-                analysis = analyzeRegion(worldRoot, regionPath, scannedAtNs, sampleChunks);
+                analysis = analyzeRegion(worldRoot, regionPath, scannedAtNs, playerContext);
             } catch (IOException e) {
                 failedRegions++;
                 LinearReader.LOGGER.warn("[LinearReader] prune-chunks scan failed for {}: {}",
@@ -154,6 +155,7 @@ public final class ChunkPruner {
             return;
         }
 
+        List<String> sampleChunks = buildSampleChunks(plans, playerContext);
         PendingPrune pending = new PendingPrune(
                 System.currentTimeMillis() + CONFIRM_WINDOW_MS,
                 scannedAtNs,
@@ -198,7 +200,8 @@ public final class ChunkPruner {
             msg.append("§e  Regions that failed to scan: §f").append(failedRegions).append('\n');
         }
 
-        appendChatRegionList(msg, plans);
+        appendPlayerContext(msg, playerContext);
+        appendChatRegionList(msg, plans, playerContext);
         appendSampleChunks(msg, pending.sampleChunks());
         msg.append("§c  WARNING: This permanently deletes matching chunk data from .linear region files.\n")
                 .append("§c  Run this while the server is quiet and make sure you have backups.\n")
@@ -267,10 +270,11 @@ public final class ChunkPruner {
         send(source, msg.toString());
     }
 
-    private static RegionAnalysis analyzeRegion(Path worldRoot, Path regionPath, long scannedAtNs, List<String> sampleChunks)
+    private static RegionAnalysis analyzeRegion(Path worldRoot, Path regionPath, long scannedAtNs, PlayerContext playerContext)
             throws IOException {
 
         String regionLabel = worldRoot.relativize(regionPath).toString();
+        String regionDirLabel = worldRoot.relativize(regionPath.getParent()).toString().replace('\\', '/');
         Matcher matcher = REGION_FILE_PATTERN.matcher(regionPath.getFileName().toString());
         if (!matcher.matches()) {
             return RegionAnalysis.notBusy(null, 0, 0L);
@@ -287,6 +291,7 @@ public final class ChunkPruner {
 
         long openMutationStart = openRegion != null ? openRegion.lastMutationTimeNs() : Long.MIN_VALUE;
         BitSet candidates = new BitSet(1024);
+        List<ChunkPos> sampleCandidates = new ArrayList<>();
         int presentChunkCount = 0;
         boolean ownsRegion = openRegion == null;
         LinearRegionFile region = ownsRegion ? new LinearRegionFile(regionPath, false) : openRegion;
@@ -306,9 +311,7 @@ public final class ChunkPruner {
                     if (tag == null) continue;
                     if (isPrunableChunk(tag)) {
                         candidates.set(localIndex);
-                        if (sampleChunks.size() < MAX_SAMPLE_CHUNKS) {
-                            sampleChunks.add(regionLabel + " @ chunk " + pos.x + ", " + pos.z);
-                        }
+                        considerSampleChunk(sampleCandidates, pos, playerContext, regionDirLabel);
                     }
                 }
             }
@@ -338,9 +341,11 @@ public final class ChunkPruner {
                 regionPath,
                 normalized,
                 regionLabel,
+                regionDirLabel,
                 regionX,
                 regionZ,
                 (BitSet) candidates.clone(),
+                List.copyOf(sampleCandidates),
                 candidates.cardinality(),
                 regionFileSize,
                 lastModifiedMillis(regionPath),
@@ -505,16 +510,30 @@ public final class ChunkPruner {
         return String.format(java.util.Locale.ROOT, "%.2f %s", value, units[unitIndex]);
     }
 
-    private static void appendChatRegionList(StringBuilder msg, List<RegionPlan> plans) {
+    private static void appendPlayerContext(StringBuilder msg, PlayerContext playerContext) {
+        if (playerContext == null) return;
+        msg.append("§7  Your position: §fchunk ")
+                .append(playerContext.chunkX()).append(", ").append(playerContext.chunkZ())
+                .append(" §8(region ").append(playerContext.regionX()).append(", ").append(playerContext.regionZ())
+                .append(" in ").append(playerContext.regionDirLabel()).append(")\n");
+    }
+
+    private static void appendChatRegionList(StringBuilder msg, List<RegionPlan> plans, PlayerContext playerContext) {
         msg.append("§7  Regions:\n");
-        int shown = Math.min(plans.size(), MAX_CHAT_REGIONS);
+        List<RegionPlan> displayPlans = selectDisplayRegions(plans, playerContext);
+        int shown = Math.min(displayPlans.size(), MAX_CHAT_REGIONS);
         for (int i = 0; i < shown; i++) {
-            RegionPlan plan = plans.get(i);
+            RegionPlan plan = displayPlans.get(i);
             msg.append("§7    §f").append(plan.regionLabel())
-                    .append(" §7(").append(plan.candidateCount()).append(" chunk(s))\n");
+                    .append(" §7(").append(plan.candidateCount()).append(" chunk(s))");
+            String distance = describeRegionDistance(plan, playerContext);
+            if (distance != null) {
+                msg.append(" §8[").append(distance).append(']');
+            }
+            msg.append('\n');
         }
-        if (plans.size() > shown) {
-            msg.append("§7    §8... and ").append(plans.size() - shown).append(" more\n");
+        if (displayPlans.size() > shown) {
+            msg.append("§7    §8... and ").append(displayPlans.size() - shown).append(" more\n");
         }
     }
 
@@ -524,6 +543,151 @@ public final class ChunkPruner {
         for (String sample : sampleChunks) {
             msg.append("§7    §f").append(sample).append('\n');
         }
+    }
+
+    private static PlayerContext playerContextFor(CommandSourceStack source, Path worldRoot) {
+        if (source.getEntity() == null) return null;
+
+        ChunkPos chunkPos = new ChunkPos(net.minecraft.core.BlockPos.containing(source.getPosition()));
+        Path regionFolder = LinearReader.regionFolderForDimension(source.getLevel().dimension());
+        String regionDirLabel = regionFolder != null && regionFolder.startsWith(worldRoot)
+                ? worldRoot.relativize(regionFolder).toString().replace('\\', '/')
+                : "region";
+        return new PlayerContext(
+                regionDirLabel,
+                chunkPos.x,
+                chunkPos.z,
+                chunkPos.x >> 5,
+                chunkPos.z >> 5
+        );
+    }
+
+    private static void considerSampleChunk(List<ChunkPos> samples, ChunkPos candidate,
+                                            PlayerContext playerContext, String regionDirLabel) {
+        if (samples.size() < 3) {
+            samples.add(candidate);
+            return;
+        }
+        if (playerContext == null || !regionDirLabel.equals(playerContext.regionDirLabel())) {
+            return;
+        }
+
+        int worstIndex = -1;
+        long worstDistance = Long.MIN_VALUE;
+        for (int i = 0; i < samples.size(); i++) {
+            long distance = chunkDistanceSq(samples.get(i), playerContext);
+            if (distance > worstDistance) {
+                worstDistance = distance;
+                worstIndex = i;
+            }
+        }
+
+        long candidateDistance = chunkDistanceSq(candidate, playerContext);
+        if (candidateDistance < worstDistance && worstIndex >= 0) {
+            samples.set(worstIndex, candidate);
+        }
+    }
+
+    private static List<RegionPlan> selectDisplayRegions(List<RegionPlan> plans, PlayerContext playerContext) {
+        LinkedHashMap<String, RegionPlan> selected = new LinkedHashMap<>();
+        int nearbyTarget = Math.min(MAX_CHAT_REGIONS / 2, MAX_CHAT_REGIONS);
+
+        if (playerContext != null) {
+            plans.stream()
+                    .filter(plan -> plan.regionDirLabel().equals(playerContext.regionDirLabel()))
+                    .sorted(Comparator
+                            .comparingLong((RegionPlan plan) -> regionDistanceSq(plan, playerContext))
+                            .thenComparing(Comparator.comparingInt(RegionPlan::candidateCount).reversed())
+                            .thenComparing(RegionPlan::regionLabel))
+                    .limit(nearbyTarget)
+                    .forEach(plan -> selected.put(plan.regionLabel(), plan));
+        }
+
+        plans.stream()
+                .sorted(Comparator
+                        .comparingInt(RegionPlan::candidateCount).reversed()
+                        .thenComparing(Comparator.comparingLong(RegionPlan::estimatedReclaimBytes).reversed())
+                        .thenComparingLong(plan -> regionDistanceSq(plan, playerContext))
+                        .thenComparing(RegionPlan::regionLabel))
+                .forEach(plan -> {
+                    if (selected.size() < MAX_CHAT_REGIONS) {
+                        selected.putIfAbsent(plan.regionLabel(), plan);
+                    }
+                });
+
+        return new ArrayList<>(selected.values());
+    }
+
+    private static List<String> buildSampleChunks(List<RegionPlan> plans, PlayerContext playerContext) {
+        LinkedHashMap<String, String> selected = new LinkedHashMap<>();
+        int nearbyTarget = playerContext != null ? MAX_SAMPLE_CHUNKS / 2 : 0;
+
+        if (playerContext != null) {
+            plans.stream()
+                    .filter(plan -> plan.regionDirLabel().equals(playerContext.regionDirLabel()))
+                    .flatMap(plan -> plan.sampleChunks().stream()
+                            .map(chunkPos -> new SampleChunk(plan, chunkPos)))
+                    .sorted(Comparator
+                            .comparingLong((SampleChunk sample) -> chunkDistanceSq(sample.chunkPos(), playerContext))
+                            .thenComparing(Comparator.comparingInt((SampleChunk sample) -> sample.plan().candidateCount()).reversed())
+                            .thenComparing(sample -> sample.plan().regionLabel()))
+                    .limit(nearbyTarget)
+                    .forEach(sample -> selected.putIfAbsent(sampleKey(sample),
+                            formatSampleChunk(sample, "nearby")));
+        }
+
+        plans.stream()
+                .sorted(Comparator
+                        .comparingInt(RegionPlan::candidateCount).reversed()
+                        .thenComparing(Comparator.comparingLong(RegionPlan::estimatedReclaimBytes).reversed())
+                        .thenComparingLong(plan -> regionDistanceSq(plan, playerContext))
+                        .thenComparing(RegionPlan::regionLabel))
+                .forEach(plan -> {
+                    for (ChunkPos chunkPos : plan.sampleChunks()) {
+                        if (selected.size() >= MAX_SAMPLE_CHUNKS) {
+                            return;
+                        }
+                        SampleChunk sample = new SampleChunk(plan, chunkPos);
+                        selected.putIfAbsent(sampleKey(sample),
+                                formatSampleChunk(sample, "region has " + plan.candidateCount() + " prune candidates"));
+                    }
+                });
+
+        return new ArrayList<>(selected.values());
+    }
+
+    private static String formatSampleChunk(SampleChunk sample, String reason) {
+        return sample.plan().regionLabel() + " @ chunk " + sample.chunkPos().x + ", " + sample.chunkPos().z
+                + " §8(" + reason + ")";
+    }
+
+    private static String sampleKey(SampleChunk sample) {
+        return sample.plan().regionLabel() + "|" + sample.chunkPos().x + "|" + sample.chunkPos().z;
+    }
+
+    private static String describeRegionDistance(RegionPlan plan, PlayerContext playerContext) {
+        if (playerContext == null || !plan.regionDirLabel().equals(playerContext.regionDirLabel())) {
+            return null;
+        }
+        long distanceSq = regionDistanceSq(plan, playerContext);
+        if (distanceSq == 0L) return "you are here";
+        long distance = Math.round(Math.sqrt(distanceSq));
+        return "~" + distance + " region(s) away";
+    }
+
+    private static long regionDistanceSq(RegionPlan plan, PlayerContext playerContext) {
+        if (playerContext == null || !plan.regionDirLabel().equals(playerContext.regionDirLabel())) {
+            return Long.MAX_VALUE / 4L;
+        }
+        long dx = (long) plan.regionX() - playerContext.regionX();
+        long dz = (long) plan.regionZ() - playerContext.regionZ();
+        return dx * dx + dz * dz;
+    }
+
+    private static long chunkDistanceSq(ChunkPos chunkPos, PlayerContext playerContext) {
+        long dx = (long) chunkPos.x - playerContext.chunkX();
+        long dz = (long) chunkPos.z - playerContext.chunkZ();
+        return dx * dx + dz * dz;
     }
 
     private static void send(CommandSourceStack source, String msg) {
@@ -544,13 +708,24 @@ public final class ChunkPruner {
             Path path,
             Path normalizedPath,
             String regionLabel,
+            String regionDirLabel,
             int regionX,
             int regionZ,
             BitSet localChunkBits,
+            List<ChunkPos> sampleChunks,
             int candidateCount,
             long fileSize,
             long lastModifiedMs,
             long estimatedReclaimBytes) {}
+
+    private record PlayerContext(
+            String regionDirLabel,
+            int chunkX,
+            int chunkZ,
+            int regionX,
+            int regionZ) {}
+
+    private record SampleChunk(RegionPlan plan, ChunkPos chunkPos) {}
 
     private record PendingPrune(
             long expiresAtMs,
