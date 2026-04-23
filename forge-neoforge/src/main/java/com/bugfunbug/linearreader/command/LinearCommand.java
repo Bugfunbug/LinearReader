@@ -8,7 +8,6 @@ import com.bugfunbug.linearreader.linear.LinearExporter;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -44,9 +43,7 @@ public class LinearCommand {
                         .then(Commands.literal("prune-chunks")
                                 .executes(LinearCommand::executePruneChunks)
                                 .then(Commands.literal("confirm")
-                                        .executes(LinearCommand::executePruneChunksConfirm)
-                                        .then(Commands.argument("token", StringArgumentType.word())
-                                                .executes(LinearCommand::executePruneChunksConfirm))))
+                                        .executes(LinearCommand::executePruneChunksConfirm)))
                         .then(Commands.literal("sync-backups")
                                 .executes(LinearCommand::executeSyncBackups)
                                 .then(Commands.literal("confirm")
