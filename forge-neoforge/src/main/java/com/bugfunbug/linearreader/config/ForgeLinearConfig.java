@@ -30,6 +30,7 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.IntValue     BACKUP_MAX_AGE_MINUTES;
     private static final ForgeConfigSpec.IntValue     BACKUP_QUIET_SECONDS;
     private static final ForgeConfigSpec.IntValue     REGIONS_PER_SAVE_TICK;
+    private static final ForgeConfigSpec.IntValue     CONFIRM_WINDOW_SECONDS;
     private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MIN_DIRTY_REGIONS;
     private static final ForgeConfigSpec.IntValue     PRESSURE_FLUSH_MAX_DIRTY_REGIONS;
     private static final ForgeConfigSpec.IntValue     SLOW_IO_THRESHOLD_MS;
@@ -106,6 +107,14 @@ public final class ForgeLinearConfig {
                         "Default = 4"
                 )
                 .defineInRange("regionsPerSaveTick", 4, 1, 64);
+
+        CONFIRM_WINDOW_SECONDS = builder
+                .comment(
+                        "Confirmation window shared by prune-chunks and sync-backups.",
+                        "Commands must be confirmed again after this many seconds.",
+                        "Default = 60"
+                )
+                .defineInRange("confirmWindowSeconds", 60, 10, 3600);
 
         PRESSURE_FLUSH_MIN_DIRTY_REGIONS = builder
                 .comment(
@@ -185,6 +194,7 @@ public final class ForgeLinearConfig {
                 BACKUP_MAX_AGE_MINUTES.get(),
                 BACKUP_QUIET_SECONDS.get(),
                 REGIONS_PER_SAVE_TICK.get(),
+                CONFIRM_WINDOW_SECONDS.get(),
                 pressureFlushMin,
                 pressureFlushMax,
                 SLOW_IO_THRESHOLD_MS.get(),
@@ -229,6 +239,9 @@ public final class ForgeLinearConfig {
                 "Maximum dirty regions submitted to the background flush executor",
                 "per server tick during a world save.",
                 "Higher drains backlog faster, but increases save-time work.");
+        addInt(lines, "confirmWindowSeconds", CONFIRM_WINDOW_SECONDS.get(),
+                "Confirmation window shared by prune-chunks and sync-backups.",
+                "Commands must be confirmed again after this many seconds.");
         addInt(lines, "pressureFlushMinDirtyRegions", pressureFlushMin,
                 "Lower bound for the dynamic pressure-flush dirty-region target.",
                 "Smaller values make pressure flushing kick in more aggressively.");

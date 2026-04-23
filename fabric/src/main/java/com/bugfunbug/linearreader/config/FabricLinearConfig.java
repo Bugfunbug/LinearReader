@@ -34,6 +34,9 @@ public class FabricLinearConfig {
     /** Dirty regions submitted to the flush executor per server tick during world saves. */
     public int regionsPerSaveTick = 4;
 
+    /** Confirmation window shared by prune-chunks and sync-backups. */
+    public int confirmWindowSeconds = 60;
+
     /** Lower bound for the dynamic pressure-flush dirty-region target. */
     public int pressureFlushMinDirtyRegions = 4;
 
@@ -63,6 +66,7 @@ public class FabricLinearConfig {
         backupMaxAgeMinutes = clamp(backupMaxAgeMinutes, 1, 10080);
         backupQuietSeconds = clamp(backupQuietSeconds, 0, 3600);
         regionsPerSaveTick   = clamp(regionsPerSaveTick,   1,  64);
+        confirmWindowSeconds = clamp(confirmWindowSeconds, 10, 3600);
         pressureFlushMinDirtyRegions = clamp(pressureFlushMinDirtyRegions, 1, 64);
         pressureFlushMaxDirtyRegions = clamp(pressureFlushMaxDirtyRegions, 1, 128);
         pressureFlushMaxDirtyRegions = Math.max(pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);

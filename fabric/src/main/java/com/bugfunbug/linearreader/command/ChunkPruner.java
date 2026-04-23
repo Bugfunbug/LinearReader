@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.command;
 
 import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.nbt.CompoundTag;
@@ -40,7 +41,6 @@ import java.util.stream.Stream;
  */
 public final class ChunkPruner {
 
-    private static final long CONFIRM_WINDOW_MS = 60_000L;
     private static final int MAX_SAMPLE_CHUNKS = 8;
     private static final int MAX_CHAT_REGIONS = 12;
     private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?\\d+)\\.(-?\\d+)\\.linear$");
@@ -157,7 +157,7 @@ public final class ChunkPruner {
 
         List<String> sampleChunks = buildSampleChunks(plans, playerContext);
         PendingPrune pending = new PendingPrune(
-                System.currentTimeMillis() + CONFIRM_WINDOW_MS,
+                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
                 scannedAtNs,
                 worldRoot,
                 List.copyOf(plans),
@@ -205,7 +205,9 @@ public final class ChunkPruner {
         appendSampleChunks(msg, pending.sampleChunks());
         msg.append("§c  WARNING: This permanently deletes matching chunk data from .linear region files.\n")
                 .append("§c  Run this while the server is quiet and make sure you have backups.\n")
-                .append("§c  Confirmation expires in 60 seconds.\n")
+                .append("§c  Confirmation expires in ")
+                .append(LinearConfig.getConfirmWindowSeconds())
+                .append(" seconds.\n")
                 .append("§c  Confirm with: §f/linearreader prune-chunks confirm");
 
         send(source, msg.toString().stripTrailing());

@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.command;
 
 import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
@@ -23,7 +24,6 @@ import java.util.stream.Stream;
  */
 public final class BackupSyncer {
 
-    private static final long CONFIRM_WINDOW_MS = 60_000L;
     private static final int MAX_CHAT_FILES = 12;
     private static final AtomicReference<PendingSync> PENDING = new AtomicReference<>();
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
@@ -169,7 +169,7 @@ public final class BackupSyncer {
         }
 
         PendingSync pending = new PendingSync(
-                System.currentTimeMillis() + CONFIRM_WINDOW_MS,
+                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
                 worldRoot,
                 List.copyOf(plans),
                 skippedBusyFiles,
@@ -194,7 +194,9 @@ public final class BackupSyncer {
         appendPlanList(msg, plans);
         msg.append("§c  WARNING: This refreshes existing backups and deletes orphan .linear.bak files.\n")
                 .append("§c  Live regions without backups are left alone.\n")
-                .append("§c  Confirmation expires in 60 seconds.\n")
+                .append("§c  Confirmation expires in ")
+                .append(LinearConfig.getConfirmWindowSeconds())
+                .append(" seconds.\n")
                 .append("§c  Confirm with: §f/linearreader sync-backups confirm");
 
         send(source, msg.toString().stripTrailing());

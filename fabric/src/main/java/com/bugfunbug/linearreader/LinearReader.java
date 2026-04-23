@@ -352,6 +352,7 @@ public class LinearReader implements ModInitializer {
                 cfg.backupMaxAgeMinutes,
                 cfg.backupQuietSeconds,
                 cfg.regionsPerSaveTick,
+                cfg.confirmWindowSeconds,
                 cfg.pressureFlushMinDirtyRegions,
                 cfg.pressureFlushMaxDirtyRegions,
                 cfg.slowIoThresholdMs,

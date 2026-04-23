@@ -26,6 +26,7 @@ public final class LinearConfig {
     private static volatile int     backupMaxAgeMinutes = 30;
     private static volatile int     backupQuietSeconds = 60;
     private static volatile int     regionsPerSaveTick   = 4;
+    private static volatile int     confirmWindowSeconds = 60;
     private static volatile int     pressureFlushMinDirtyRegions = 4;
     private static volatile int     pressureFlushMaxDirtyRegions = 16;
     private static volatile int     slowIoThresholdMs    = 500;
@@ -46,6 +47,8 @@ public final class LinearConfig {
     public static int     getBackupMaxAgeMinutes()    { return backupMaxAgeMinutes; }
     public static int     getBackupQuietSeconds()     { return backupQuietSeconds; }
     public static int     getRegionsPerSaveTick()   { return regionsPerSaveTick; }
+    public static int     getConfirmWindowSeconds() { return confirmWindowSeconds; }
+    public static long    getConfirmWindowMs()      { return confirmWindowSeconds * 1000L; }
     public static int     getPressureFlushMinDirtyRegions() { return pressureFlushMinDirtyRegions; }
     public static int     getPressureFlushMaxDirtyRegions() { return pressureFlushMaxDirtyRegions; }
     public static int     getSlowIoThresholdMs()    { return slowIoThresholdMs; }
@@ -67,6 +70,7 @@ public final class LinearConfig {
             int     backupMaxAgeMinutes,
             int     backupQuietSeconds,
             int     regionsPerSaveTick,
+            int     confirmWindowSeconds,
             int     pressureFlushMinDirtyRegions,
             int     pressureFlushMaxDirtyRegions,
             int     slowIoThresholdMs,
@@ -83,6 +87,7 @@ public final class LinearConfig {
         LinearConfig.backupMaxAgeMinutes = backupMaxAgeMinutes;
         LinearConfig.backupQuietSeconds = backupQuietSeconds;
         LinearConfig.regionsPerSaveTick   = regionsPerSaveTick;
+        LinearConfig.confirmWindowSeconds = confirmWindowSeconds;
         LinearConfig.pressureFlushMinDirtyRegions = pressureFlushMinDirtyRegions;
         LinearConfig.pressureFlushMaxDirtyRegions = Math.max(
                 pressureFlushMinDirtyRegions, pressureFlushMaxDirtyRegions);

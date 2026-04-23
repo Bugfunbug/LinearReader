@@ -86,6 +86,9 @@ public final class FabricConfigIO {
                 "Maximum dirty regions submitted to the background flush executor",
                 "per server tick during a world save.",
                 "Higher drains backlog faster, but increases save-time work.");
+        addInt(lines, "confirmWindowSeconds", config.confirmWindowSeconds,
+                "Confirmation window shared by prune-chunks and sync-backups.",
+                "Commands must be confirmed again after this many seconds.");
         addInt(lines, "pressureFlushMinDirtyRegions", config.pressureFlushMinDirtyRegions,
                 "Lower bound for the dynamic pressure-flush dirty-region target.",
                 "Smaller values make pressure flushing kick in more aggressively.");
@@ -144,6 +147,7 @@ public final class FabricConfigIO {
                     case "backupMaxAgeMinutes" -> config.backupMaxAgeMinutes = parseInt(key, value, config.backupMaxAgeMinutes);
                     case "backupQuietSeconds" -> config.backupQuietSeconds = parseInt(key, value, config.backupQuietSeconds);
                     case "regionsPerSaveTick" -> config.regionsPerSaveTick = parseInt(key, value, config.regionsPerSaveTick);
+                    case "confirmWindowSeconds" -> config.confirmWindowSeconds = parseInt(key, value, config.confirmWindowSeconds);
                     case "pressureFlushMinDirtyRegions" -> config.pressureFlushMinDirtyRegions = parseInt(key, value, config.pressureFlushMinDirtyRegions);
                     case "pressureFlushMaxDirtyRegions" -> config.pressureFlushMaxDirtyRegions = parseInt(key, value, config.pressureFlushMaxDirtyRegions);
                     case "slowIoThresholdMs" -> config.slowIoThresholdMs = parseInt(key, value, config.slowIoThresholdMs);
