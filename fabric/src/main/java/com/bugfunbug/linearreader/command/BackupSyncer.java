@@ -97,7 +97,7 @@ public final class BackupSyncer {
         for (Path linearPath : findLinearFiles(worldRoot)) {
             Path normalized = linearPath.toAbsolutePath().normalize();
             LinearRegionFile openRegion = findOpenRegion(normalized);
-            if (openRegion != null && openRegion.isFlushing()) {
+            if (isBusy(openRegion)) {
                 skippedBusyFiles++;
                 continue;
             }
@@ -211,24 +211,20 @@ public final class BackupSyncer {
             send(source, "§c[LinearReader] The backup sync confirmation window expired. Run the analysis again.");
             return;
         }
+        if (!validatePendingPlan(pending)) {
+            send(source, "§e[LinearReader] backup sync was cancelled for safety because the world state changed "
+                    + "after analysis. No backups were modified.\n"
+                    + "§7  Rerun §f/linearreader sync-backups§7 when the server is quieter, then confirm again.");
+            return;
+        }
 
         int refreshed = 0;
         int deletedOrphans = 0;
-        int skippedBusy = 0;
         long backupDeltaBytes = 0L;
 
         for (BackupPlan plan : pending.files()) {
             try {
                 if (plan.action() == SyncAction.REFRESH) {
-                    LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
-                    if (openRegion != null && openRegion.isFlushing()) {
-                        skippedBusy++;
-                        continue;
-                    }
-                    if (openRegion != null && openRegion.isDirty()) {
-                        openRegion.flush(false);
-                    }
-
                     long oldSize = Files.exists(plan.backupPath()) ? Files.size(plan.backupPath()) : 0L;
                     LinearRegionFile.writeBackupCopy(plan.path());
                     long newSize = Files.size(plan.backupPath());
@@ -259,10 +255,24 @@ public final class BackupSyncer {
         } else if (backupDeltaBytes < 0L) {
             msg.append("\n§7  Backup storage grew by: §f").append(formatBytes(-backupDeltaBytes));
         }
-        if (skippedBusy > 0) {
-            msg.append("\n§e  Busy files skipped during confirm: §f").append(skippedBusy);
-        }
         send(source, msg.toString());
+    }
+
+    private static boolean validatePendingPlan(PendingSync pending) {
+        for (BackupPlan plan : pending.files()) {
+            LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
+            if (isBusy(openRegion)) return false;
+
+            if (plan.action() == SyncAction.REFRESH) {
+                if (!Files.exists(plan.path())) return false;
+                if (!Files.exists(plan.backupPath())) return false;
+                continue;
+            }
+
+            if (!Files.exists(plan.backupPath())) return false;
+            if (Files.exists(plan.path())) return false;
+        }
+        return true;
     }
 
     private static List<Path> findLinearFiles(Path worldRoot) {
@@ -326,6 +336,10 @@ public final class BackupSyncer {
             }
         }
         return null;
+    }
+
+    private static boolean isBusy(LinearRegionFile region) {
+        return region != null && (region.isDirty() || region.isFlushing());
     }
 
     private static void appendPlanList(StringBuilder msg, List<BackupPlan> plans) {

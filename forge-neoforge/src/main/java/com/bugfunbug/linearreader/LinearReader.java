@@ -123,7 +123,10 @@ public class LinearReader {
         void run(LinearRegionFile region) throws IOException;
     }
 
-    /** Explicit save/close barriers should finish backups too. */
+    /**
+     * Explicit save/close barriers must finish live region flushes.
+     * Backup writes are still best-effort async work on a separate executor.
+     */
     public static void flushRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
         runRegionIoTasks(regions, "flush", region -> region.flush(true));
     }
@@ -691,18 +694,6 @@ public class LinearReader {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static boolean isValidLinearFile(Path file) {
-        try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
-            long len = raf.length();
-            if (len < 40) return false;
-            byte[] buf = new byte[8];
-            raf.readFully(buf);
-            long headerSig = ByteBuffer.wrap(buf).getLong();
-            raf.seek(len - 8);
-            raf.readFully(buf);
-            long footerSig = ByteBuffer.wrap(buf).getLong();
-            return headerSig == LINEAR_SIGNATURE && footerSig == LINEAR_SIGNATURE;
-        } catch (IOException e) {
-            return false;
-        }
+        return LinearRegionFile.verifyOnDisk(file).ok;
     }
 }

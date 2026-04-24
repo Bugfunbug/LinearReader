@@ -857,80 +857,16 @@ public class LinearRegionFile {
         byte[] raw = Files.readAllBytes(src);
         long readNs = System.nanoTime() - startNs;
 
-        if (raw.length < 40)
-            throw new IOException("[LinearReader] File too short (" + raw.length + " bytes): " + src);
-
-        long verifyStartNs = System.nanoTime();
-        ByteBuffer hdr    = ByteBuffer.wrap(raw, 0, 32);
-        long  sig         = hdr.getLong();
-        byte  version     = hdr.get();
-        long  newestTs    = hdr.getLong();
-        hdr.get();                            // compression level (not needed for decompression)
-        short storedCount = hdr.getShort();
-        hdr.getInt();                         // compressed-body length (we use actual file length)
-        long  storedCRC   = hdr.getLong();
-
-        if (sig != LINEAR_SIGNATURE)
-            throw new IOException("[LinearReader] Bad header signature in: " + src);
-        if (version != LINEAR_VERSION)
-            throw new IOException("[LinearReader] Unsupported version " + version + " in: " + src);
-        if (ByteBuffer.wrap(raw, raw.length - 8, 8).getLong() != LINEAR_SIGNATURE)
-            throw new IOException("[LinearReader] Bad footer signature in: " + src);
-
-        int compressedBodyLength = raw.length - 40;
-        if (compressedBodyLength <= 0)
-            throw new IOException("[LinearReader] No compressed body in: " + src);
-
-        if (storedCRC != 0L) {
-            CRC32 crc = TL_CRC32.get();
-            crc.reset();
-            crc.update(raw, 32, compressedBodyLength);
-            if (crc.getValue() != storedCRC)
-                throw new IOException("[LinearReader] CRC32 checksum mismatch in: " + src
-                        + " (expected " + storedCRC + ", got " + crc.getValue() + ")");
-        }
-        long verifyNs = System.nanoTime() - verifyStartNs;
-
-        long decompressStartNs = System.nanoTime();
-        long expectedDecompSize = ZstdSupport.decompressedSize(raw, 32, compressedBodyLength);
-        if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE)
-            throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
-
-        byte[] decompressed = new byte[(int) expectedDecompSize];
-        long result = ZstdSupport.decompress(
-                decompressed, 0, decompressed.length,
-                raw, 32, compressedBodyLength);
-        if (ZstdSupport.isError(result))
-            throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
-        if (result != expectedDecompSize)
-            throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
-        long decompressNs = System.nanoTime() - decompressStartNs;
-
-        if (decompressed.length < INNER_HEADER_SIZE)
-            throw new IOException("[LinearReader] Decompressed body too short in: " + src);
-
-        long parseStartNs = System.nanoTime();
-        ByteBuffer inner  = ByteBuffer.wrap(decompressed, 0, INNER_HEADER_SIZE);
-        int        totalSz    = 0;
-        int        realCount  = 0;
-        for (int i = 0; i < CHUNK_COUNT; i++) {
-            chunkSizes[i] = inner.getInt();
-            timestamps[i] = inner.getInt();
-            totalSz      += chunkSizes[i];
-            if (chunkSizes[i] > 0) realCount++;
-        }
-
-        if (INNER_HEADER_SIZE + totalSz != decompressed.length)
-            throw new IOException("[LinearReader] Inner size mismatch in: " + src
-                    + " (expected " + (INNER_HEADER_SIZE + totalSz) + ", got " + decompressed.length + ")");
-
-        if (realCount != storedCount)
-            throw new IOException("[LinearReader] Chunk count mismatch in: " + src
-                    + " (header says " + storedCount + ", counted " + realCount + ")");
+        ValidationResult validated = validateLinearBytes(src, raw);
+        long verifyNs = validated.verifyNs;
+        long decompressNs = validated.decompressNs;
+        long parseNs = validated.parseNs;
 
         Arrays.fill(chunkData, null);
-        loadedBody = decompressed;
+        loadedBody = validated.decompressedBody;
         materializedBytes = 0L;
+        System.arraycopy(validated.parsedChunkSizes, 0, chunkSizes, 0, CHUNK_COUNT);
+        System.arraycopy(validated.parsedTimestamps, 0, timestamps, 0, CHUNK_COUNT);
 
         int offset = INNER_HEADER_SIZE;
         for (int i = 0; i < CHUNK_COUNT; i++) {
@@ -938,10 +874,9 @@ public class LinearRegionFile {
             offset += chunkSizes[i];
         }
 
-        this.newestTimestamp = newestTs;
-        this.chunkCount      = realCount;
-        this.totalDataBytes  = totalSz;
-        long parseNs = System.nanoTime() - parseStartNs;
+        this.newestTimestamp = validated.newestTimestamp;
+        this.chunkCount      = validated.realChunkCount;
+        this.totalDataBytes  = validated.totalChunkBytes;
 
         long elapsedNs = System.nanoTime() - startNs;
         long elapsedMs = elapsedNs / 1_000_000L;
@@ -1230,41 +1165,148 @@ public class LinearRegionFile {
     public static VerifyResult verifyOnDisk(Path file) {
         try {
             byte[] raw = Files.readAllBytes(file);
-
-            if (raw.length < 40)
-                return VerifyResult.fail("file too short (" + raw.length + " bytes)");
-
-            ByteBuffer hdr  = ByteBuffer.wrap(raw, 0, 32);
-            long sig        = hdr.getLong();
-            byte version    = hdr.get();
-            hdr.getLong();  // newest timestamp
-            hdr.get();      // compression level
-            hdr.getShort(); // chunk count
-            hdr.getInt();   // compressed length
-            long storedCRC  = hdr.getLong();
-
-            if (sig != LINEAR_SIGNATURE)
-                return VerifyResult.fail("bad header signature");
-            if (version != LINEAR_VERSION)
-                return VerifyResult.fail("unsupported version: " + version);
-            if (ByteBuffer.wrap(raw, raw.length - 8, 8).getLong() != LINEAR_SIGNATURE)
-                return VerifyResult.fail("bad footer signature");
-
-            if (storedCRC != 0L) {
-                int compLen = raw.length - 40;
-                if (compLen <= 0)
-                    return VerifyResult.fail("no compressed body");
-                CRC32 crc = TL_CRC32.get();
-                crc.reset();
-                crc.update(raw, 32, compLen);
-                if (crc.getValue() != storedCRC)
-                    return VerifyResult.fail(
-                            "CRC32 mismatch (expected " + storedCRC + ", got " + crc.getValue() + ")");
-            }
-
-            return VerifyResult.ok(storedCRC != 0L);
+            ValidationResult validated = validateLinearBytes(file, raw);
+            return VerifyResult.ok(validated.hasCRC);
         } catch (IOException e) {
-            return VerifyResult.fail("I/O error: " + e.getMessage());
+            String msg = e.getMessage();
+            return VerifyResult.fail(msg != null && msg.startsWith("[LinearReader]") ? msg : "I/O error: " + msg);
+        }
+    }
+
+    private static ValidationResult validateLinearBytes(Path src, byte[] raw) throws IOException {
+        if (raw.length < 40) {
+            throw new IOException("[LinearReader] File too short (" + raw.length + " bytes): " + src);
+        }
+
+        long verifyStartNs = System.nanoTime();
+        ByteBuffer hdr = ByteBuffer.wrap(raw, 0, 32);
+        long sig = hdr.getLong();
+        byte version = hdr.get();
+        long newestTs = hdr.getLong();
+        hdr.get(); // compression level
+        short storedCount = hdr.getShort();
+        hdr.getInt(); // compressed-body length (current readers trust file length instead)
+        long storedCRC = hdr.getLong();
+
+        if (sig != LINEAR_SIGNATURE) {
+            throw new IOException("[LinearReader] Bad header signature in: " + src);
+        }
+        if (version != LINEAR_VERSION) {
+            throw new IOException("[LinearReader] Unsupported version " + version + " in: " + src);
+        }
+        if (ByteBuffer.wrap(raw, raw.length - 8, 8).getLong() != LINEAR_SIGNATURE) {
+            throw new IOException("[LinearReader] Bad footer signature in: " + src);
+        }
+
+        int compressedBodyLength = raw.length - 40;
+        if (compressedBodyLength <= 0) {
+            throw new IOException("[LinearReader] No compressed body in: " + src);
+        }
+
+        if (storedCRC != 0L) {
+            CRC32 crc = TL_CRC32.get();
+            crc.reset();
+            crc.update(raw, 32, compressedBodyLength);
+            if (crc.getValue() != storedCRC) {
+                throw new IOException("[LinearReader] CRC32 checksum mismatch in: " + src
+                        + " (expected " + storedCRC + ", got " + crc.getValue() + ")");
+            }
+        }
+        long verifyNs = System.nanoTime() - verifyStartNs;
+
+        long decompressStartNs = System.nanoTime();
+        long expectedDecompSize = ZstdSupport.decompressedSize(raw, 32, compressedBodyLength);
+        if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE) {
+            throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
+        }
+
+        byte[] decompressed = new byte[(int) expectedDecompSize];
+        long result = ZstdSupport.decompress(
+                decompressed, 0, decompressed.length,
+                raw, 32, compressedBodyLength);
+        if (ZstdSupport.isError(result)) {
+            throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
+        }
+        if (result != expectedDecompSize) {
+            throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
+        }
+        long decompressNs = System.nanoTime() - decompressStartNs;
+
+        if (decompressed.length < INNER_HEADER_SIZE) {
+            throw new IOException("[LinearReader] Decompressed body too short in: " + src);
+        }
+
+        long parseStartNs = System.nanoTime();
+        ByteBuffer inner = ByteBuffer.wrap(decompressed, 0, INNER_HEADER_SIZE);
+        int[] parsedChunkSizes = new int[CHUNK_COUNT];
+        int[] parsedTimestamps = new int[CHUNK_COUNT];
+        long totalSz = 0L;
+        int realCount = 0;
+        for (int i = 0; i < CHUNK_COUNT; i++) {
+            int chunkSize = inner.getInt();
+            int timestamp = inner.getInt();
+            if (chunkSize < 0) {
+                throw new IOException("[LinearReader] Negative chunk size in: " + src + " at local index " + i);
+            }
+            parsedChunkSizes[i] = chunkSize;
+            parsedTimestamps[i] = timestamp;
+            totalSz += chunkSize;
+            if (chunkSize > 0) {
+                realCount++;
+            }
+        }
+
+        if (INNER_HEADER_SIZE + totalSz != decompressed.length) {
+            throw new IOException("[LinearReader] Inner size mismatch in: " + src
+                    + " (expected " + (INNER_HEADER_SIZE + totalSz) + ", got " + decompressed.length + ")");
+        }
+
+        if (realCount != storedCount) {
+            throw new IOException("[LinearReader] Chunk count mismatch in: " + src
+                    + " (header says " + storedCount + ", counted " + realCount + ")");
+        }
+        long parseNs = System.nanoTime() - parseStartNs;
+
+        return new ValidationResult(
+                newestTs,
+                storedCRC != 0L,
+                decompressed,
+                parsedChunkSizes,
+                parsedTimestamps,
+                realCount,
+                totalSz,
+                verifyNs,
+                decompressNs,
+                parseNs
+        );
+    }
+
+    private static final class ValidationResult {
+        final long newestTimestamp;
+        final boolean hasCRC;
+        final byte[] decompressedBody;
+        final int[] parsedChunkSizes;
+        final int[] parsedTimestamps;
+        final int realChunkCount;
+        final long totalChunkBytes;
+        final long verifyNs;
+        final long decompressNs;
+        final long parseNs;
+
+        private ValidationResult(long newestTimestamp, boolean hasCRC, byte[] decompressedBody,
+                                 int[] parsedChunkSizes, int[] parsedTimestamps,
+                                 int realChunkCount, long totalChunkBytes,
+                                 long verifyNs, long decompressNs, long parseNs) {
+            this.newestTimestamp = newestTimestamp;
+            this.hasCRC = hasCRC;
+            this.decompressedBody = decompressedBody;
+            this.parsedChunkSizes = parsedChunkSizes;
+            this.parsedTimestamps = parsedTimestamps;
+            this.realChunkCount = realChunkCount;
+            this.totalChunkBytes = totalChunkBytes;
+            this.verifyNs = verifyNs;
+            this.decompressNs = decompressNs;
+            this.parseNs = parseNs;
         }
     }
 
