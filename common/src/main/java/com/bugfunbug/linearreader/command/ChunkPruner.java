@@ -110,11 +110,127 @@ public final class ChunkPruner {
     private static void runDryRun(CommandSourceStack source, MinecraftServer server, Path worldRoot) {
         long scannedAtNs = System.nanoTime();
         PlayerContext playerContext = playerContextFor(source, worldRoot);
-        List<Path> regionFiles = findChunkRegionFiles(worldRoot);
-        if (regionFiles.isEmpty()) {
+        PruneAnalysis analysis = analyzeWorld(worldRoot, playerContext, scannedAtNs);
+        if (analysis.scannedRegionFiles() == 0) {
             send(source, "§e[LinearReader] No chunk-region .linear files were found.");
             PENDING.set(null);
             return;
+        }
+
+        if (analysis.candidateChunks() == 0) {
+            PENDING.set(null);
+            send(source, "§7[LinearReader] prune-chunks found no safe candidates."
+                    + (analysis.skippedBusyRegions() > 0 ? " §8(" + analysis.skippedBusyRegions() + " busy region(s) skipped)" : "")
+                    + (analysis.failedRegions() > 0 ? " §8(" + analysis.failedRegions() + " region(s) failed to scan)" : ""));
+            return;
+        }
+
+        PendingPrune pending = new PendingPrune(
+                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
+                analysis
+        );
+        PENDING.set(pending);
+
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks dry run found {} candidate chunk(s) across {} region(s).",
+                analysis.candidateChunks(), analysis.regions().size());
+        for (RegionPlan plan : analysis.regions()) {
+            LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks candidate region: {} -> {} chunk(s)",
+                    plan.regionLabel(), plan.candidateCount());
+        }
+
+        StringBuilder msg = new StringBuilder()
+                .append("§6[LinearReader] prune-chunks dry run complete.\n")
+                .append("§7  Chunks matching rules: §f").append(analysis.candidateChunks())
+                .append("§7 out of §f").append(analysis.scannedPresentChunks())
+                .append("§7 stored chunk(s) scanned\n")
+                .append("§7  Affected regions: §f").append(analysis.regions().size()).append('\n');
+        if (analysis.estimatedReclaimBytes() > 0L) {
+            msg.append("§7  Estimated .linear reclaim: §f~").append(formatBytes(analysis.estimatedReclaimBytes()))
+                    .append(" §8(based on current compression ratio)\n");
+            if (com.bugfunbug.linearreader.config.LinearConfig.isBackupEnabled()) {
+                msg.append("§8  Backups are left untouched. Run §f/linearreader sync-backups§8 if you want .bak files to match.\n");
+            }
+        }
+
+        if (analysis.skippedBusyRegions() > 0) {
+            msg.append("§e  Busy regions skipped: §f").append(analysis.skippedBusyRegions())
+                    .append(" §8(rerun while the server is quieter)\n");
+        }
+        if (analysis.failedRegions() > 0) {
+            msg.append("§e  Regions that failed to scan: §f").append(analysis.failedRegions()).append('\n');
+        }
+
+        appendPlayerContext(msg, playerContext);
+        appendChatRegionList(msg, analysis.regions(), playerContext);
+        appendSampleChunks(msg, analysis.sampleChunks());
+        msg.append("§c  WARNING: This permanently deletes matching chunk data from .linear region files.\n")
+                .append("§c  Run this while the server is quiet and make sure you have backups.\n")
+                .append("§c  Confirmation expires in ")
+                .append(LinearConfig.getConfirmWindowSeconds())
+                .append(" seconds.\n")
+                .append("§c  Confirm with: §f/linearreader prune-chunks confirm");
+
+        send(source, msg.toString().stripTrailing());
+    }
+
+    private static void runConfirm(CommandSourceStack source, PendingPrune pending) {
+        if (!PENDING.compareAndSet(pending, null)) {
+            send(source, "§c[LinearReader] prune-chunks confirmation state changed. Run the analysis again.");
+            return;
+        }
+        if (System.currentTimeMillis() > pending.expiresAtMs()) {
+            send(source, "§c[LinearReader] The prune-chunks confirmation window expired. Run the analysis again.");
+            return;
+        }
+        if (!validatePlan(pending.analysis())) {
+            send(source, "§e[LinearReader] Pruning was cancelled for safety because one or more affected regions "
+                    + "changed after analysis. No chunks were deleted.\n"
+                    + "§7  Rerun §f/linearreader prune-chunks§7 when the server is quieter, then confirm again.");
+            return;
+        }
+
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks confirm started for {} candidate chunk(s) across {} region(s).",
+                pending.analysis().candidateChunks(), pending.analysis().regions().size());
+
+        PruneExecutionResult result;
+        try {
+            result = applyPlan(pending.analysis());
+        } catch (IOException e) {
+            send(source, "§c[LinearReader] prune-chunks failed: " + e.getMessage());
+            return;
+        }
+
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks complete: {} chunk(s) deleted across {} region(s).",
+                result.deletedChunks(), result.changedRegions());
+        StringBuilder msg = new StringBuilder("§a[LinearReader] prune-chunks complete. Deleted §f")
+                .append(result.deletedChunks())
+                .append("§a chunk(s) across §f")
+                .append(result.changedRegions())
+                .append("§a region(s).");
+        if (result.reclaimedBytes() > 0L) {
+            msg.append("\n§7  Reclaimed from .linear files: §f").append(formatBytes(result.reclaimedBytes()));
+            if (com.bugfunbug.linearreader.config.LinearConfig.isBackupEnabled()) {
+                msg.append("\n§8  World-folder size may differ if backups were updated.");
+            }
+        }
+        send(source, msg.toString());
+    }
+
+    static PruneAnalysis analyzeWorld(Path worldRoot, PlayerContext playerContext, long scannedAtNs) {
+        List<Path> regionFiles = findChunkRegionFiles(worldRoot);
+        if (regionFiles.isEmpty()) {
+            return new PruneAnalysis(
+                    worldRoot,
+                    scannedAtNs,
+                    List.of(),
+                    List.of(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0L
+            );
         }
 
         List<RegionPlan> plans = new ArrayList<>();
@@ -146,19 +262,12 @@ public final class ChunkPruner {
         }
 
         int candidateChunks = plans.stream().mapToInt(RegionPlan::candidateCount).sum();
-        if (candidateChunks == 0) {
-            PENDING.set(null);
-            send(source, "§7[LinearReader] prune-chunks found no safe candidates."
-                    + (skippedBusyRegions > 0 ? " §8(" + skippedBusyRegions + " busy region(s) skipped)" : "")
-                    + (failedRegions > 0 ? " §8(" + failedRegions + " region(s) failed to scan)" : ""));
-            return;
-        }
-
-        List<String> sampleChunks = buildSampleChunks(plans, playerContext);
-        PendingPrune pending = new PendingPrune(
-                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
-                scannedAtNs,
+        List<String> sampleChunks = candidateChunks > 0
+                ? buildSampleChunks(plans, playerContext)
+                : List.of();
+        return new PruneAnalysis(
                 worldRoot,
+                scannedAtNs,
                 List.copyOf(plans),
                 List.copyOf(sampleChunks),
                 skippedBusyRegions,
@@ -168,107 +277,6 @@ public final class ChunkPruner {
                 scannedPresentChunks,
                 estimatedLinearReclaimBytes
         );
-        PENDING.set(pending);
-
-        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks dry run found {} candidate chunk(s) across {} region(s).",
-                candidateChunks, plans.size());
-        for (RegionPlan plan : plans) {
-            LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks candidate region: {} -> {} chunk(s)",
-                    plan.regionLabel(), plan.candidateCount());
-        }
-
-        StringBuilder msg = new StringBuilder()
-                .append("§6[LinearReader] prune-chunks dry run complete.\n")
-                .append("§7  Chunks matching rules: §f").append(candidateChunks)
-                .append("§7 out of §f").append(scannedPresentChunks)
-                .append("§7 stored chunk(s) scanned\n")
-                .append("§7  Affected regions: §f").append(plans.size()).append('\n');
-        if (estimatedLinearReclaimBytes > 0L) {
-            msg.append("§7  Estimated .linear reclaim: §f~").append(formatBytes(estimatedLinearReclaimBytes))
-                    .append(" §8(based on current compression ratio)\n");
-            if (com.bugfunbug.linearreader.config.LinearConfig.isBackupEnabled()) {
-                msg.append("§8  Backups are left untouched. Run §f/linearreader sync-backups§8 if you want .bak files to match.\n");
-            }
-        }
-
-        if (skippedBusyRegions > 0) {
-            msg.append("§e  Busy regions skipped: §f").append(skippedBusyRegions)
-                    .append(" §8(rerun while the server is quieter)\n");
-        }
-        if (failedRegions > 0) {
-            msg.append("§e  Regions that failed to scan: §f").append(failedRegions).append('\n');
-        }
-
-        appendPlayerContext(msg, playerContext);
-        appendChatRegionList(msg, plans, playerContext);
-        appendSampleChunks(msg, pending.sampleChunks());
-        msg.append("§c  WARNING: This permanently deletes matching chunk data from .linear region files.\n")
-                .append("§c  Run this while the server is quiet and make sure you have backups.\n")
-                .append("§c  Confirmation expires in ")
-                .append(LinearConfig.getConfirmWindowSeconds())
-                .append(" seconds.\n")
-                .append("§c  Confirm with: §f/linearreader prune-chunks confirm");
-
-        send(source, msg.toString().stripTrailing());
-    }
-
-    private static void runConfirm(CommandSourceStack source, PendingPrune pending) {
-        if (!PENDING.compareAndSet(pending, null)) {
-            send(source, "§c[LinearReader] prune-chunks confirmation state changed. Run the analysis again.");
-            return;
-        }
-        if (System.currentTimeMillis() > pending.expiresAtMs()) {
-            send(source, "§c[LinearReader] The prune-chunks confirmation window expired. Run the analysis again.");
-            return;
-        }
-        if (!validatePendingPlan(pending)) {
-            send(source, "§e[LinearReader] Pruning was cancelled for safety because one or more affected regions "
-                    + "changed after analysis. No chunks were deleted.\n"
-                    + "§7  Rerun §f/linearreader prune-chunks§7 when the server is quieter, then confirm again.");
-            return;
-        }
-
-        int deletedChunks = 0;
-        int changedRegions = 0;
-        long reclaimedBytes = 0L;
-
-        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks confirm started for {} candidate chunk(s) across {} region(s).",
-                pending.candidateChunks(), pending.regions().size());
-
-        for (RegionPlan plan : pending.regions()) {
-            try {
-                int deletedInRegion = pruneRegion(plan, pending.scannedAtNs());
-                if (deletedInRegion > 0) {
-                    changedRegions++;
-                    deletedChunks += deletedInRegion;
-                    long newSize = Files.size(plan.path());
-                    reclaimedBytes += Math.max(0L, plan.fileSize() - newSize);
-                    LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks deleted {} chunk(s) from {}.",
-                            deletedInRegion, plan.regionLabel());
-                }
-            } catch (IOException e) {
-                LinearRuntime.LOGGER.error("[LinearReader] prune-chunks failed while pruning {}: {}",
-                        plan.regionLabel(), e.getMessage(), e);
-                send(source, "§c[LinearReader] prune-chunks failed while pruning "
-                        + plan.regionLabel() + ": " + e.getMessage());
-                return;
-            }
-        }
-
-        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks complete: {} chunk(s) deleted across {} region(s).",
-                deletedChunks, changedRegions);
-        StringBuilder msg = new StringBuilder("§a[LinearReader] prune-chunks complete. Deleted §f")
-                .append(deletedChunks)
-                .append("§a chunk(s) across §f")
-                .append(changedRegions)
-                .append("§a region(s).");
-        if (reclaimedBytes > 0L) {
-            msg.append("\n§7  Reclaimed from .linear files: §f").append(formatBytes(reclaimedBytes));
-            if (com.bugfunbug.linearreader.config.LinearConfig.isBackupEnabled()) {
-                msg.append("\n§8  World-folder size may differ if backups were updated.");
-            }
-        }
-        send(source, msg.toString());
     }
 
     private static RegionAnalysis analyzeRegion(Path worldRoot, Path regionPath, long scannedAtNs, PlayerContext playerContext)
@@ -355,8 +363,8 @@ public final class ChunkPruner {
         return RegionAnalysis.notBusy(plan, presentChunkCount, estimatedReclaimBytes);
     }
 
-    private static boolean validatePendingPlan(PendingPrune pending) {
-        for (RegionPlan plan : pending.regions()) {
+    static boolean validatePlan(PruneAnalysis analysis) {
+        for (RegionPlan plan : analysis.regions()) {
             try {
                 if (!Files.exists(plan.path())) return false;
                 if (Files.size(plan.path()) != plan.fileSize()) return false;
@@ -368,10 +376,37 @@ public final class ChunkPruner {
             LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
             if (openRegion != null) {
                 if (openRegion.isDirty() || openRegion.isFlushing()) return false;
-                if (openRegion.lastMutationTimeNs() > pending.scannedAtNs()) return false;
+                if (openRegion.lastMutationTimeNs() > analysis.scannedAtNs()) return false;
             }
         }
         return true;
+    }
+
+    static PruneExecutionResult applyPlan(PruneAnalysis analysis) throws IOException {
+        int deletedChunks = 0;
+        int changedRegions = 0;
+        long reclaimedBytes = 0L;
+
+        for (RegionPlan plan : analysis.regions()) {
+            try {
+                int deletedInRegion = pruneRegion(plan, analysis.scannedAtNs());
+                if (deletedInRegion > 0) {
+                    changedRegions++;
+                    deletedChunks += deletedInRegion;
+                    long newSize = Files.size(plan.path());
+                    reclaimedBytes += Math.max(0L, plan.fileSize() - newSize);
+                    LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks deleted {} chunk(s) from {}.",
+                            deletedInRegion, plan.regionLabel());
+                }
+            } catch (IOException e) {
+                LinearRuntime.LOGGER.error("[LinearReader] prune-chunks failed while pruning {}: {}",
+                        plan.regionLabel(), e.getMessage(), e);
+                throw new IOException("prune-chunks failed while pruning "
+                        + plan.regionLabel() + ": " + e.getMessage(), e);
+            }
+        }
+
+        return new PruneExecutionResult(deletedChunks, changedRegions, reclaimedBytes);
     }
 
     private static int pruneRegion(RegionPlan plan, long scannedAtNs) throws IOException {
@@ -431,7 +466,7 @@ public final class ChunkPruner {
         return null;
     }
 
-    private static boolean isPrunableChunk(CompoundTag rawTag) {
+    static boolean isPrunableChunk(CompoundTag rawTag) {
         CompoundTag tag = rawTag.contains("Level", Tag.TAG_COMPOUND)
                 ? rawTag.getCompound("Level")
                 : rawTag;
@@ -705,7 +740,7 @@ public final class ChunkPruner {
         }
     }
 
-    private record RegionPlan(
+    static record RegionPlan(
             Path path,
             Path normalizedPath,
             String regionLabel,
@@ -719,7 +754,7 @@ public final class ChunkPruner {
             long lastModifiedMs,
             long estimatedReclaimBytes) {}
 
-    private record PlayerContext(
+    static record PlayerContext(
             String regionDirLabel,
             int chunkX,
             int chunkZ,
@@ -728,10 +763,9 @@ public final class ChunkPruner {
 
     private record SampleChunk(RegionPlan plan, ChunkPos chunkPos) {}
 
-    private record PendingPrune(
-            long expiresAtMs,
-            long scannedAtNs,
+    static record PruneAnalysis(
             Path worldRoot,
+            long scannedAtNs,
             List<RegionPlan> regions,
             List<String> sampleChunks,
             int skippedBusyRegions,
@@ -741,10 +775,21 @@ public final class ChunkPruner {
             int scannedPresentChunks,
             long estimatedReclaimBytes) {
 
-        private PendingPrune {
+        PruneAnalysis {
             Objects.requireNonNull(worldRoot, "worldRoot");
             Objects.requireNonNull(regions, "regions");
             Objects.requireNonNull(sampleChunks, "sampleChunks");
+        }
+    }
+
+    static record PruneExecutionResult(int deletedChunks, int changedRegions, long reclaimedBytes) {}
+
+    private record PendingPrune(
+            long expiresAtMs,
+            PruneAnalysis analysis) {
+
+        private PendingPrune {
+            Objects.requireNonNull(analysis, "analysis");
         }
     }
 }

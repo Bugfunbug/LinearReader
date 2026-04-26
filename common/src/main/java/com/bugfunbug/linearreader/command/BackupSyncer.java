@@ -89,6 +89,80 @@ public final class BackupSyncer {
     }
 
     private static void runDryRun(CommandSourceStack source, Path worldRoot) {
+        SyncAnalysis analysis = analyzeWorld(worldRoot);
+        if (!analysis.hasChanges()) {
+            PENDING.set(null);
+            send(source, "§7[LinearReader] No existing backups needed reconciliation."
+                    + (analysis.liveWithoutBackupCount() > 0 ? " §8(" + analysis.liveWithoutBackupCount() + " live file(s) without backups left alone)" : "")
+                    + (analysis.skippedBusyFiles() > 0 ? " §8(" + analysis.skippedBusyFiles() + " busy file(s) skipped)" : ""));
+            return;
+        }
+
+        PendingSync pending = new PendingSync(
+                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
+                analysis
+        );
+        PENDING.set(pending);
+
+        StringBuilder msg = new StringBuilder()
+                .append("§6[LinearReader] backup sync dry run complete.\n")
+                .append("§7  Existing backups to refresh: §f").append(analysis.refreshCount()).append('\n')
+                .append("§7  Orphan backups to delete: §f").append(analysis.orphanDeleteCount()).append('\n');
+        if (analysis.liveWithoutBackupCount() > 0) {
+            msg.append("§7  Live files without backups left alone: §f").append(analysis.liveWithoutBackupCount()).append('\n');
+        }
+        if (analysis.skippedBusyFiles() > 0) {
+            msg.append("§e  Busy files skipped: §f").append(analysis.skippedBusyFiles())
+                    .append(" §8(rerun while the server is quieter)\n");
+        }
+
+        appendPlanList(msg, analysis.files());
+        msg.append("§c  WARNING: This refreshes existing backups and deletes orphan .linear.bak files.\n")
+                .append("§c  Live regions without backups are left alone.\n")
+                .append("§c  Confirmation expires in ")
+                .append(LinearConfig.getConfirmWindowSeconds())
+                .append(" seconds.\n")
+                .append("§c  Confirm with: §f/linearreader sync-backups confirm");
+
+        send(source, msg.toString().stripTrailing());
+    }
+
+    private static void runConfirm(CommandSourceStack source, PendingSync pending) {
+        if (!PENDING.compareAndSet(pending, null)) {
+            send(source, "§c[LinearReader] backup sync confirmation state changed. Run the analysis again.");
+            return;
+        }
+        if (System.currentTimeMillis() > pending.expiresAtMs()) {
+            send(source, "§c[LinearReader] The backup sync confirmation window expired. Run the analysis again.");
+            return;
+        }
+        if (!validatePlan(pending.analysis())) {
+            send(source, "§e[LinearReader] backup sync was cancelled for safety because the world state changed "
+                    + "after analysis. No backups were modified.\n"
+                    + "§7  Rerun §f/linearreader sync-backups§7 when the server is quieter, then confirm again.");
+            return;
+        }
+
+        SyncExecutionResult result;
+        try {
+            result = applyPlan(pending.analysis());
+        } catch (IOException e) {
+            send(source, "§c[LinearReader] backup sync failed: " + e.getMessage());
+            return;
+        }
+
+        StringBuilder msg = new StringBuilder("§a[LinearReader] backup sync complete.\n")
+                .append("§7  Backups refreshed: §f").append(result.refreshed()).append('\n')
+                .append("§7  Orphan backups deleted: §f").append(result.deletedOrphans());
+        if (result.backupDeltaBytes() > 0L) {
+            msg.append("\n§7  Backup storage reclaimed: §f").append(formatBytes(result.backupDeltaBytes()));
+        } else if (result.backupDeltaBytes() < 0L) {
+            msg.append("\n§7  Backup storage grew by: §f").append(formatBytes(-result.backupDeltaBytes()));
+        }
+        send(source, msg.toString());
+    }
+
+    static SyncAnalysis analyzeWorld(Path worldRoot) {
         List<BackupPlan> plans = new ArrayList<>();
         int skippedBusyFiles = 0;
         int liveWithoutBackupCount = 0;
@@ -102,8 +176,7 @@ public final class BackupSyncer {
             }
 
             Path backupPath = LinearRegionFile.backupPathFor(linearPath);
-            boolean existed = Files.exists(backupPath);
-            if (!existed) {
+            if (!Files.exists(backupPath)) {
                 liveWithoutBackupCount++;
                 continue;
             }
@@ -122,7 +195,7 @@ public final class BackupSyncer {
                     linearPath,
                     normalized,
                     backupPath,
-                    worldRoot.relativize(linearPath).toString(),
+                    worldRoot.relativize(linearPath).toString().replace('\\', '/'),
                     oldBackupSize
             ));
         }
@@ -145,20 +218,12 @@ public final class BackupSyncer {
                     linearPath,
                     linearPath.toAbsolutePath().normalize(),
                     backupPath,
-                    worldRoot.relativize(backupPath).toString(),
+                    worldRoot.relativize(backupPath).toString().replace('\\', '/'),
                     oldBackupSize
             ));
         }
 
         plans.sort(Comparator.comparing(BackupPlan::relativePath));
-
-        if (plans.isEmpty()) {
-            PENDING.set(null);
-            send(source, "§7[LinearReader] No existing backups needed reconciliation."
-                    + (liveWithoutBackupCount > 0 ? " §8(" + liveWithoutBackupCount + " live file(s) without backups left alone)" : "")
-                    + (skippedBusyFiles > 0 ? " §8(" + skippedBusyFiles + " busy file(s) skipped)" : ""));
-            return;
-        }
 
         int refreshCount = 0;
         int orphanDeleteCount = 0;
@@ -167,8 +232,7 @@ public final class BackupSyncer {
             else orphanDeleteCount++;
         }
 
-        PendingSync pending = new PendingSync(
-                System.currentTimeMillis() + LinearConfig.getConfirmWindowMs(),
+        return new SyncAnalysis(
                 worldRoot,
                 List.copyOf(plans),
                 skippedBusyFiles,
@@ -176,52 +240,31 @@ public final class BackupSyncer {
                 refreshCount,
                 orphanDeleteCount
         );
-        PENDING.set(pending);
-
-        StringBuilder msg = new StringBuilder()
-                .append("§6[LinearReader] backup sync dry run complete.\n")
-                .append("§7  Existing backups to refresh: §f").append(refreshCount).append('\n')
-                .append("§7  Orphan backups to delete: §f").append(orphanDeleteCount).append('\n');
-        if (liveWithoutBackupCount > 0) {
-            msg.append("§7  Live files without backups left alone: §f").append(liveWithoutBackupCount).append('\n');
-        }
-        if (skippedBusyFiles > 0) {
-            msg.append("§e  Busy files skipped: §f").append(skippedBusyFiles)
-                    .append(" §8(rerun while the server is quieter)\n");
-        }
-
-        appendPlanList(msg, plans);
-        msg.append("§c  WARNING: This refreshes existing backups and deletes orphan .linear.bak files.\n")
-                .append("§c  Live regions without backups are left alone.\n")
-                .append("§c  Confirmation expires in ")
-                .append(LinearConfig.getConfirmWindowSeconds())
-                .append(" seconds.\n")
-                .append("§c  Confirm with: §f/linearreader sync-backups confirm");
-
-        send(source, msg.toString().stripTrailing());
     }
 
-    private static void runConfirm(CommandSourceStack source, PendingSync pending) {
-        if (!PENDING.compareAndSet(pending, null)) {
-            send(source, "§c[LinearReader] backup sync confirmation state changed. Run the analysis again.");
-            return;
-        }
-        if (System.currentTimeMillis() > pending.expiresAtMs()) {
-            send(source, "§c[LinearReader] The backup sync confirmation window expired. Run the analysis again.");
-            return;
-        }
-        if (!validatePendingPlan(pending)) {
-            send(source, "§e[LinearReader] backup sync was cancelled for safety because the world state changed "
-                    + "after analysis. No backups were modified.\n"
-                    + "§7  Rerun §f/linearreader sync-backups§7 when the server is quieter, then confirm again.");
-            return;
-        }
+    static boolean validatePlan(SyncAnalysis analysis) {
+        for (BackupPlan plan : analysis.files()) {
+            LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
+            if (isBusy(openRegion)) return false;
 
+            if (plan.action() == SyncAction.REFRESH) {
+                if (!Files.exists(plan.path())) return false;
+                if (!Files.exists(plan.backupPath())) return false;
+                continue;
+            }
+
+            if (!Files.exists(plan.backupPath())) return false;
+            if (Files.exists(plan.path())) return false;
+        }
+        return true;
+    }
+
+    static SyncExecutionResult applyPlan(SyncAnalysis analysis) throws IOException {
         int refreshed = 0;
         int deletedOrphans = 0;
         long backupDeltaBytes = 0L;
 
-        for (BackupPlan plan : pending.files()) {
+        for (BackupPlan plan : analysis.files()) {
             try {
                 if (plan.action() == SyncAction.REFRESH) {
                     long oldSize = Files.exists(plan.backupPath()) ? Files.size(plan.backupPath()) : 0L;
@@ -241,37 +284,11 @@ public final class BackupSyncer {
             } catch (IOException e) {
                 LinearRuntime.LOGGER.error("[LinearReader] backup sync failed for {}: {}",
                         plan.relativePath(), e.getMessage(), e);
-                send(source, "§c[LinearReader] backup sync failed for " + plan.relativePath() + ": " + e.getMessage());
-                return;
+                throw new IOException("backup sync failed for " + plan.relativePath() + ": " + e.getMessage(), e);
             }
         }
 
-        StringBuilder msg = new StringBuilder("§a[LinearReader] backup sync complete.\n")
-                .append("§7  Backups refreshed: §f").append(refreshed).append('\n')
-                .append("§7  Orphan backups deleted: §f").append(deletedOrphans);
-        if (backupDeltaBytes > 0L) {
-            msg.append("\n§7  Backup storage reclaimed: §f").append(formatBytes(backupDeltaBytes));
-        } else if (backupDeltaBytes < 0L) {
-            msg.append("\n§7  Backup storage grew by: §f").append(formatBytes(-backupDeltaBytes));
-        }
-        send(source, msg.toString());
-    }
-
-    private static boolean validatePendingPlan(PendingSync pending) {
-        for (BackupPlan plan : pending.files()) {
-            LinearRegionFile openRegion = findOpenRegion(plan.normalizedPath());
-            if (isBusy(openRegion)) return false;
-
-            if (plan.action() == SyncAction.REFRESH) {
-                if (!Files.exists(plan.path())) return false;
-                if (!Files.exists(plan.backupPath())) return false;
-                continue;
-            }
-
-            if (!Files.exists(plan.backupPath())) return false;
-            if (Files.exists(plan.path())) return false;
-        }
-        return true;
+        return new SyncExecutionResult(refreshed, deletedOrphans, backupDeltaBytes);
     }
 
     private static List<Path> findLinearFiles(Path worldRoot) {
@@ -371,7 +388,7 @@ public final class BackupSyncer {
         source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(msg), false);
     }
 
-    private record BackupPlan(
+    static record BackupPlan(
             SyncAction action,
             Path path,
             Path normalizedPath,
@@ -379,13 +396,12 @@ public final class BackupSyncer {
             String relativePath,
             long oldBackupSize) {}
 
-    private enum SyncAction {
+    enum SyncAction {
         REFRESH,
         DELETE_ORPHAN
     }
 
-    private record PendingSync(
-            long expiresAtMs,
+    static record SyncAnalysis(
             Path worldRoot,
             List<BackupPlan> files,
             int skippedBusyFiles,
@@ -393,9 +409,24 @@ public final class BackupSyncer {
             int refreshCount,
             int orphanDeleteCount) {
 
-        private PendingSync {
+        SyncAnalysis {
             Objects.requireNonNull(worldRoot, "worldRoot");
             Objects.requireNonNull(files, "files");
+        }
+
+        boolean hasChanges() {
+            return !files.isEmpty();
+        }
+    }
+
+    static record SyncExecutionResult(int refreshed, int deletedOrphans, long backupDeltaBytes) {}
+
+    private record PendingSync(
+            long expiresAtMs,
+            SyncAnalysis analysis) {
+
+        private PendingSync {
+            Objects.requireNonNull(analysis, "analysis");
         }
     }
 }

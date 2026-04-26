@@ -26,6 +26,9 @@ registerChildTask('buildFabric', 'fabric', 'build')
 registerChildTask('buildForgeNeoForge', 'forge-neoforge', 'build')
 registerChildTask('cleanFabric', 'fabric', 'clean')
 registerChildTask('cleanForgeNeoForge', 'forge-neoforge', 'clean')
+registerChildTask('testFabric', 'fabric', 'test')
+registerChildTask('testForgeNeoForge', 'forge-neoforge', 'test')
+registerChildTask('generateTestCorpus', 'fabric', 'generateTestCorpus')
 
 tasks.register('compileAll') {
     group = 'linearreader'
@@ -45,10 +48,20 @@ tasks.register('buildAll') {
     dependsOn 'buildFabric', 'buildForgeNeoForge'
 }
 
+tasks.register('testAll') {
+    group = 'linearreader'
+    description = 'Runs the shared storage test suite in all loader environments.'
+    dependsOn 'testFabric', 'testForgeNeoForge'
+}
+
 tasks.register('cleanAll') {
     group = 'linearreader'
     description = 'Cleans both loader targets.'
     dependsOn 'cleanFabric', 'cleanForgeNeoForge'
+}
+
+tasks.named('check').configure {
+    dependsOn 'testFabric', 'testForgeNeoForge'
 }
 
 tasks.register('collectJars', Copy) {

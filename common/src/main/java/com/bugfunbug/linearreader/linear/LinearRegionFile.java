@@ -1158,6 +1158,20 @@ public class LinearRegionFile {
         }
     }
 
+    static void awaitBackupTasks() throws IOException {
+        try {
+            getBackupExecutor().submit(() -> null).get(5L, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("[LinearReader] Interrupted while waiting for backup tasks.", e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            throw new IOException("[LinearReader] Backup task failed while draining executor.", cause);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IOException("[LinearReader] Timed out while waiting for backup tasks.", e);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Static utility: verify a file on disk without opening it as a region.
     // -------------------------------------------------------------------------

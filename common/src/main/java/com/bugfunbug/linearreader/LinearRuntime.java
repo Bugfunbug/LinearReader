@@ -584,6 +584,14 @@ public final class LinearRuntime {
         Path root = worldRoot;
         if (root == null) return;
 
+        LegacyBackupMigrationResult result = migrateLegacyBackups(root);
+        if (result.moved() > 0 || result.deduped() > 0 || result.conflicts() > 0) {
+            LOGGER.info("[LinearReader] Legacy backup migration: {} moved, {} deduped, {} conflicts.",
+                    result.moved(), result.deduped(), result.conflicts());
+        }
+    }
+
+    static LegacyBackupMigrationResult migrateLegacyBackups(Path root) {
         int moved = 0;
         int deduped = 0;
         int conflicts = 0;
@@ -628,10 +636,7 @@ public final class LinearRuntime {
             LOGGER.warn("[LinearReader] Could not scan for legacy backups: {}", e.getMessage());
         }
 
-        if (moved > 0 || deduped > 0 || conflicts > 0) {
-            LOGGER.info("[LinearReader] Legacy backup migration: {} moved, {} deduped, {} conflicts.",
-                    moved, deduped, conflicts);
-        }
+        return new LegacyBackupMigrationResult(moved, deduped, conflicts);
     }
 
     private static boolean isLegacyBackupFile(Path path) {
@@ -674,4 +679,6 @@ public final class LinearRuntime {
         }
         return hooks;
     }
+
+    static record LegacyBackupMigrationResult(int moved, int deduped, int conflicts) {}
 }

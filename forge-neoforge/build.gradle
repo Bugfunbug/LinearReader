@@ -14,7 +14,15 @@ base {
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
-sourceSets.main.java.srcDir '../common/src/main/java'
+sourceSets {
+    main {
+        java.srcDir '../common/src/main/java'
+    }
+    test {
+        java.srcDir '../common/src/test/java'
+        resources.srcDir '../common/src/test/resources'
+    }
+}
 
 configurations {
     zstdRuntime
@@ -22,6 +30,8 @@ configurations {
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+    testRuntimeOnly 'com.github.luben:zstd-jni:1.5.5-11'
     // Keep zstd-jni out of the mod module itself to avoid split-package crashes
     // with other mods that also bundle com.github.luben.zstd.
     zstdRuntime 'com.github.luben:zstd-jni:1.5.5-11'
@@ -64,6 +74,17 @@ sourceSets.main.resources {
 
 repositories {
     mavenCentral()
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
 }
 
 jar {

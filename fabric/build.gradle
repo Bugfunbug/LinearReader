@@ -19,6 +19,10 @@ sourceSets {
 	main {
 		java.srcDir "../common/src/main/java"
 	}
+	test {
+		java.srcDir "../common/src/test/java"
+		resources.srcDir "../common/src/test/resources"
+	}
 }
 
 loom {
@@ -41,10 +45,12 @@ dependencies {
 	modImplementation "net.fabricmc:fabric-loader:${loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
 	compileOnly "org.jetbrains:annotations:24.0.1"
+	testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
 
 	// Keep zstd-jni out of the mod module itself to avoid split-package crashes
 	// with other mods that also bundle com.github.luben.zstd.
 	zstdRuntime 'com.github.luben:zstd-jni:1.5.5-11'
+	testRuntimeOnly 'com.github.luben:zstd-jni:1.5.5-11'
 }
 
 processResources {
@@ -63,6 +69,26 @@ processResources {
 tasks.withType(JavaCompile).configureEach {
 	options.release = 17
 	options.encoding = "UTF-8"
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+	from(configurations.zstdRuntime) {
+		into "META-INF/linearreader-libs"
+		rename { "zstd-jni.jar" }
+	}
+}
+
+tasks.named('test', Test).configure {
+	useJUnitPlatform()
+}
+
+tasks.register('generateTestCorpus', JavaExec) {
+	group = 'linearreader'
+	description = 'Regenerates the shared .linear test corpus under common/src/test/resources.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.bugfunbug.linearreader.linear.LinearCorpusGenerator'
+	args file('../common/src/test/resources/corpus').absolutePath
 }
 
 jar {
