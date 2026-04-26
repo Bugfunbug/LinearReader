@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.linear;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 
@@ -78,7 +78,7 @@ public final class LinearExporter {
         Path exportRoot = worldRoot.resolveSibling(
                 worldRoot.getFileName().toString() + "_mca_export");
 
-        LinearReader.LOGGER.info(
+        LinearRuntime.LOGGER.info(
                 "[LinearReader] Starting .linear -> .mca export. Output: {}", exportRoot);
 
         // Collect every .linear file under worldRoot, preserving subfolder structure.
@@ -89,7 +89,7 @@ public final class LinearExporter {
                     .sorted()
                     .forEach(linearFiles::add);
         } catch (IOException e) {
-            LinearReader.LOGGER.error(
+            LinearRuntime.LOGGER.error(
                     "[LinearReader] Export failed — cannot walk world folder: {}", e.getMessage());
             return;
         }
@@ -97,16 +97,16 @@ public final class LinearExporter {
         FILES_TOTAL.set(linearFiles.size());
 
         if (linearFiles.isEmpty()) {
-            LinearReader.LOGGER.info("[LinearReader] No .linear files found to export.");
+            LinearRuntime.LOGGER.info("[LinearReader] No .linear files found to export.");
             return;
         }
 
-        LinearReader.LOGGER.info(
+        LinearRuntime.LOGGER.info(
                 "[LinearReader] Exporting {} region file(s) to .mca...", linearFiles.size());
 
         for (Path src : linearFiles) {
             if (Thread.currentThread().isInterrupted()) {
-                LinearReader.LOGGER.info(
+                LinearRuntime.LOGGER.info(
                         "[LinearReader] Export stopped. {}/{} file(s) done.",
                         FILES_DONE.get(), FILES_TOTAL.get());
                 return;
@@ -131,7 +131,7 @@ public final class LinearExporter {
                 FILES_DONE.incrementAndGet();
             } catch (Exception e) {
                 FILES_FAILED.incrementAndGet();
-                LinearReader.LOGGER.warn("[LinearReader] Failed to export {}: {}",
+                LinearRuntime.LOGGER.warn("[LinearReader] Failed to export {}: {}",
                         srcName, e.getMessage());
             }
         }
@@ -139,11 +139,11 @@ public final class LinearExporter {
         int done   = FILES_DONE.get();
         int failed = FILES_FAILED.get();
         if (failed == 0) {
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "[LinearReader] Export complete: {} file(s) written to {}",
                     done, exportRoot);
         } else {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Export complete: {} ok, {} failed. " +
                             "Failed files can be retried by running the command again.",
                     done, failed);

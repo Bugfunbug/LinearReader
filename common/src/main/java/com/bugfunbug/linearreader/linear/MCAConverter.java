@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.linear;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.RegionFile;
@@ -52,7 +52,7 @@ public final class MCAConverter {
                     .sorted()
                     .collect(Collectors.toList());
         } catch (IOException e) {
-            LinearReader.LOGGER.error(
+            LinearRuntime.LOGGER.error(
                     "[LinearReader] Cannot list region folder {}: {}", regionFolder, e.getMessage());
             return;
         }
@@ -62,7 +62,7 @@ public final class MCAConverter {
 
         int compressionLevel = LinearConfig.getCompressionLevel();
 
-        LinearReader.LOGGER.info(
+        LinearRuntime.LOGGER.info(
                 "[LinearReader] Converting {} .mca file(s) in {} to .linear (zstd-level={}).",
                 total, regionFolder.getFileName(), compressionLevel);
 
@@ -87,14 +87,14 @@ public final class MCAConverter {
                     convertOne(mca, compressionLevel);
                     int n = doneOk.incrementAndGet();
                     if (logEach) {
-                        LinearReader.LOGGER.info("[LinearReader] Converted: {}", mca.getFileName());
+                        LinearRuntime.LOGGER.info("[LinearReader] Converted: {}", mca.getFileName());
                     } else if (n % 50 == 0 || n == total) {
-                        LinearReader.LOGGER.info(
+                        LinearRuntime.LOGGER.info(
                                 "[LinearReader] Conversion progress: {}/{}", n, total);
                     }
                 } catch (Exception e) {
                     doneBad.incrementAndGet();
-                    LinearReader.LOGGER.error("[LinearReader] Failed to convert {}: {}",
+                    LinearRuntime.LOGGER.error("[LinearReader] Failed to convert {}: {}",
                             mca.getFileName(), e.getMessage(), e);
                 }
             });
@@ -103,13 +103,13 @@ public final class MCAConverter {
         pool.shutdown();
         try {
             if (!pool.awaitTermination(30, java.util.concurrent.TimeUnit.MINUTES)) {
-                LinearReader.LOGGER.error(
+                LinearRuntime.LOGGER.error(
                         "[LinearReader] Conversion timed out after 30 minutes in {}. " +
                                 "Remaining .mca files were NOT deleted.", regionFolder.getFileName());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            LinearReader.LOGGER.error("[LinearReader] MCA conversion interrupted in {}!",
+            LinearRuntime.LOGGER.error("[LinearReader] MCA conversion interrupted in {}!",
                     regionFolder.getFileName());
         }
 
@@ -118,10 +118,10 @@ public final class MCAConverter {
         int  bad = doneBad.get();
 
         if (bad == 0) {
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "[LinearReader] Conversion complete: {} region(s) in {}ms.", ok, ms);
         } else {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Conversion complete: {} ok, {} FAILED in {}ms. " +
                             "Failed .mca files were NOT deleted - restart to retry.", ok, bad, ms);
         }

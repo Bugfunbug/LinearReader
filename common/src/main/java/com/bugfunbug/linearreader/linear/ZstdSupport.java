@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.linear;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -79,7 +79,7 @@ final class ZstdSupport {
                     ZstdSupport.class.getClassLoader()
             );
             Class<?> zstdClass = Class.forName("com.github.luben.zstd.Zstd", true, loader);
-            LinearReader.LOGGER.debug("[LinearReader] Loaded embedded zstd-jni from {}.", extractedJar);
+            LinearRuntime.LOGGER.debug("[LinearReader] Loaded embedded zstd-jni from {}.", extractedJar);
             return new Bridge(
                     loader,
                     zstdClass.getMethod("compressBound", long.class),

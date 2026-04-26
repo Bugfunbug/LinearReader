@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.command;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import net.minecraft.commands.CommandSourceStack;
@@ -11,7 +11,6 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.Tag;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.ChunkPos;
-import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -57,7 +56,7 @@ public final class ChunkPruner {
         }
 
         MinecraftServer server = source.getServer();
-        Path worldRoot = server.getWorldPath(LevelResource.ROOT);
+        Path worldRoot = LinearRuntime.resolveWorldRoot(server);
         source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(
                 "§6[LinearReader] Starting prune-chunks analysis. "
                         + "This is a dry run; nothing will be deleted yet."), false);
@@ -130,7 +129,7 @@ public final class ChunkPruner {
                 analysis = analyzeRegion(worldRoot, regionPath, scannedAtNs, playerContext);
             } catch (IOException e) {
                 failedRegions++;
-                LinearReader.LOGGER.warn("[LinearReader] prune-chunks scan failed for {}: {}",
+                LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks scan failed for {}: {}",
                         worldRoot.relativize(regionPath), e.getMessage());
                 continue;
             }
@@ -171,10 +170,10 @@ public final class ChunkPruner {
         );
         PENDING.set(pending);
 
-        LinearReader.LOGGER.warn("[LinearReader] prune-chunks dry run found {} candidate chunk(s) across {} region(s).",
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks dry run found {} candidate chunk(s) across {} region(s).",
                 candidateChunks, plans.size());
         for (RegionPlan plan : plans) {
-            LinearReader.LOGGER.warn("[LinearReader] prune-chunks candidate region: {} -> {} chunk(s)",
+            LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks candidate region: {} -> {} chunk(s)",
                     plan.regionLabel(), plan.candidateCount());
         }
 
@@ -233,7 +232,7 @@ public final class ChunkPruner {
         int changedRegions = 0;
         long reclaimedBytes = 0L;
 
-        LinearReader.LOGGER.warn("[LinearReader] prune-chunks confirm started for {} candidate chunk(s) across {} region(s).",
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks confirm started for {} candidate chunk(s) across {} region(s).",
                 pending.candidateChunks(), pending.regions().size());
 
         for (RegionPlan plan : pending.regions()) {
@@ -244,11 +243,11 @@ public final class ChunkPruner {
                     deletedChunks += deletedInRegion;
                     long newSize = Files.size(plan.path());
                     reclaimedBytes += Math.max(0L, plan.fileSize() - newSize);
-                    LinearReader.LOGGER.warn("[LinearReader] prune-chunks deleted {} chunk(s) from {}.",
+                    LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks deleted {} chunk(s) from {}.",
                             deletedInRegion, plan.regionLabel());
                 }
             } catch (IOException e) {
-                LinearReader.LOGGER.error("[LinearReader] prune-chunks failed while pruning {}: {}",
+                LinearRuntime.LOGGER.error("[LinearReader] prune-chunks failed while pruning {}: {}",
                         plan.regionLabel(), e.getMessage(), e);
                 send(source, "§c[LinearReader] prune-chunks failed while pruning "
                         + plan.regionLabel() + ": " + e.getMessage());
@@ -256,7 +255,7 @@ public final class ChunkPruner {
             }
         }
 
-        LinearReader.LOGGER.warn("[LinearReader] prune-chunks complete: {} chunk(s) deleted across {} region(s).",
+        LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks complete: {} chunk(s) deleted across {} region(s).",
                 deletedChunks, changedRegions);
         StringBuilder msg = new StringBuilder("§a[LinearReader] prune-chunks complete. Deleted §f")
                 .append(deletedChunks)
@@ -287,7 +286,7 @@ public final class ChunkPruner {
 
         LinearRegionFile openRegion = findOpenRegion(normalized);
         if (openRegion != null && (openRegion.isDirty() || openRegion.isFlushing())) {
-            LinearReader.LOGGER.info("[LinearReader] prune-chunks skipped busy region {}", regionLabel);
+            LinearRuntime.LOGGER.info("[LinearReader] prune-chunks skipped busy region {}", regionLabel);
             return RegionAnalysis.busyResult();
         }
 
@@ -325,7 +324,7 @@ public final class ChunkPruner {
 
         if (openRegion != null) {
             if (openRegion.isDirty() || openRegion.isFlushing() || openRegion.lastMutationTimeNs() != openMutationStart) {
-                LinearReader.LOGGER.info("[LinearReader] prune-chunks skipped region {} because it changed during analysis.",
+                LinearRuntime.LOGGER.info("[LinearReader] prune-chunks skipped region {} because it changed during analysis.",
                         regionLabel);
                 return RegionAnalysis.busyResult();
             }
@@ -411,7 +410,7 @@ public final class ChunkPruner {
                     .sorted(Comparator.comparing(Path::toString))
                     .forEach(files::add);
         } catch (IOException e) {
-            LinearReader.LOGGER.warn("[LinearReader] prune-chunks could not walk world directory: {}", e.getMessage());
+            LinearRuntime.LOGGER.warn("[LinearReader] prune-chunks could not walk world directory: {}", e.getMessage());
         }
         return files;
     }
@@ -551,7 +550,7 @@ public final class ChunkPruner {
         if (source.getEntity() == null) return null;
 
         ChunkPos chunkPos = new ChunkPos(net.minecraft.core.BlockPos.containing(source.getPosition()));
-        Path regionFolder = LinearReader.regionFolderForDimension(source.getLevel().dimension());
+        Path regionFolder = LinearRuntime.regionFolderForDimension(source.getLevel().dimension());
         String regionDirLabel = regionFolder != null && regionFolder.startsWith(worldRoot)
                 ? worldRoot.relativize(regionFolder).toString().replace('\\', '/')
                 : "region";

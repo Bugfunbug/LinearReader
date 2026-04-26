@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.mixin;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.LinearStats;
 import com.bugfunbug.linearreader.linear.*;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
@@ -82,7 +82,7 @@ public abstract class RegionFileStorageMixin {
                 LinearRegionFile candidate = linearCache.get(k);
                 // Never evict a region whose latest state is still only in memory.
                 if (candidate != null
-                        && !LinearReader.isPinnedNormalized(candidate.getNormalizedPath())
+                        && !LinearRuntime.isPinnedNormalized(candidate.getNormalizedPath())
                         && candidate.canEvictFromCache()) {
                     evictKey = k;
                 }
@@ -93,7 +93,7 @@ public abstract class RegionFileStorageMixin {
                 if (staleWrapper != null) {
                     staleWrapper.close();
                 }
-                LinearReader.submitFlush(evicted);
+                LinearRuntime.submitFlush(evicted);
             }
         }
 
@@ -128,7 +128,7 @@ public abstract class RegionFileStorageMixin {
             if (dis == null) return null;
             return NbtIo.read(dis);
         } catch (IOException e) {
-            LinearReader.LOGGER.error("[LinearReader] Failed to read chunk {}: {}",
+            LinearRuntime.LOGGER.error("[LinearReader] Failed to read chunk {}: {}",
                     pos, e.getMessage(), e);
             throw e;
         }
@@ -151,7 +151,7 @@ public abstract class RegionFileStorageMixin {
             NbtIo.write(tag, dos);
             LinearStats.recordChunkWrite(System.nanoTime() - t);
         } catch (IOException e) {
-            LinearReader.LOGGER.error("[LinearReader] Failed to write chunk {}: {}",
+            LinearRuntime.LOGGER.error("[LinearReader] Failed to write chunk {}: {}",
                     pos, e.getMessage(), e);
             throw e;
         }
@@ -204,9 +204,9 @@ public abstract class RegionFileStorageMixin {
             }
         }
         try {
-            LinearReader.flushRegionsBlocking(toFlush);
+            LinearRuntime.flushRegionsBlocking(toFlush);
         } catch (IOException e) {
-            LinearReader.LOGGER.error("[LinearReader] Flush error: {}", e.getMessage(), e);
+            LinearRuntime.LOGGER.error("[LinearReader] Flush error: {}", e.getMessage(), e);
             throw e;
         }
     }
@@ -225,9 +225,9 @@ public abstract class RegionFileStorageMixin {
             regionCache.clear();
         }
         try {
-            LinearReader.closeRegionsBlocking(toClose);
+            LinearRuntime.closeRegionsBlocking(toClose);
         } catch (IOException e) {
-            LinearReader.LOGGER.error("[LinearReader] Close error: {}", e.getMessage(), e);
+            LinearRuntime.LOGGER.error("[LinearReader] Close error: {}", e.getMessage(), e);
             throw e;
         }
     }
@@ -245,7 +245,7 @@ public abstract class RegionFileStorageMixin {
         try (DataInputStream dis = region.read(pos)) {
             if (dis != null) NbtIo.parse(dis, visitor);
         } catch (IOException e) {
-            LinearReader.LOGGER.error("[LinearReader] Failed to scan chunk {}: {}",
+            LinearRuntime.LOGGER.error("[LinearReader] Failed to scan chunk {}: {}",
                     pos, e.getMessage(), e);
             throw e;
         }

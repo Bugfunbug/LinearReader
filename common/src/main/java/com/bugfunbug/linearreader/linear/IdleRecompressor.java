@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.linear;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 
 import java.io.IOException;
@@ -22,7 +22,7 @@ import java.util.zip.CRC32;
  *
  * Each recompression is an atomic .recompress.wip -> rename, identical safety
  * guarantees as normal region writes. Leftover .recompress.wip files are
- * cleaned up by LinearReader.onServerStarting() — they are never promoted
+ * cleaned up by LinearRuntime.onServerStarting() — they are never promoted
  * because they use a distinct extension, unlike live .linear.wip files.
  *
  * Only unstable open files are skipped — regions that are dirty or currently
@@ -116,7 +116,7 @@ public final class IdleRecompressor {
                 if (RUNNING.get()) continue;
                 long idleMs = System.currentTimeMillis() - LAST_IO_MS.get();
                 if (idleMs >= idleThresholdMs()) {
-                    LinearReader.LOGGER.info(
+                    LinearRuntime.LOGGER.info(
                             "[LinearReader] Server idle for {} min - starting background recompression.",
                             idleMs / 60_000L);
                     startWorker(false);
@@ -202,7 +202,7 @@ public final class IdleRecompressor {
     private static void logCompletion() {
         int total = FILES_SCANNED.get();
         if (total == 0) {
-            LinearReader.LOGGER.info("[LinearReader] Recompression done: no .linear files found.");
+            LinearRuntime.LOGGER.info("[LinearReader] Recompression done: no .linear files found.");
             return;
         }
 
@@ -228,7 +228,7 @@ public final class IdleRecompressor {
         }
 
         msg.append(", ").append(BYTES_SAVED.get()).append(" bytes saved.");
-        LinearReader.LOGGER.info(msg.toString());
+        LinearRuntime.LOGGER.info(msg.toString());
     }
 
     private static void interruptWorker() {
@@ -247,7 +247,7 @@ public final class IdleRecompressor {
                         .filter(p -> p.getFileName().toString().endsWith(".linear"))
                         .toArray(Path[]::new);
             } catch (IOException e) {
-                LinearReader.LOGGER.warn("[LinearReader] Cannot list {}: {}",
+                LinearRuntime.LOGGER.warn("[LinearReader] Cannot list {}: {}",
                         folder.getFileName(), e.getMessage());
                 continue;
             }
@@ -267,7 +267,7 @@ public final class IdleRecompressor {
                         case NO_SIZE_GAIN -> FILES_NO_SIZE_GAIN.incrementAndGet();
                     }
                     if (result.outcome() == RecompressOutcome.UPGRADED) {
-                        LinearReader.LOGGER.debug(
+                        LinearRuntime.LOGGER.debug(
                                 "[LinearReader] Recompressed {} - saved {} bytes.",
                                 p.getFileName(), result.bytesSaved());
                     }
@@ -279,7 +279,7 @@ public final class IdleRecompressor {
                     return;
                 } catch (IOException e) {
                     FILES_FAILED.incrementAndGet();
-                    LinearReader.LOGGER.warn("[LinearReader] Recompression failed for {}: {}",
+                    LinearRuntime.LOGGER.warn("[LinearReader] Recompression failed for {}: {}",
                             p.getFileName(), e.getMessage());
                 }
             }
@@ -310,7 +310,7 @@ public final class IdleRecompressor {
         int thresholdPercent = LinearConfig.getRecompressMinFreeRamPercent();
         while (availableHeapPercent() < thresholdPercent) {
             LOW_RAM_PAUSES.incrementAndGet();
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "[LinearReader] Pausing recompression for {} because JVM heap headroom is {}% (< {}%).",
                     path.getFileName(), availableHeapPercent(), thresholdPercent);
             Thread.sleep(LOW_RAM_BACKOFF_MS);

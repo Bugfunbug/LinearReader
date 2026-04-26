@@ -1,0 +1,4 @@
+rootProject.name = "LinearReader-workspace"
+
+includeBuild("fabric")
+includeBuild("forge-neoforge")

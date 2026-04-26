@@ -1,0 +1,71 @@
+import org.gradle.internal.os.OperatingSystem
+
+plugins {
+    id 'base'
+}
+
+def wrapperCommand = { String taskName ->
+    if (OperatingSystem.current().isWindows()) {
+        return ['cmd', '/c', 'gradlew.bat', taskName]
+    }
+    return ['./gradlew', taskName]
+}
+
+def registerChildTask = { String name, String childDir, String childTask ->
+    tasks.register(name, Exec) {
+        group = 'linearreader'
+        description = "Runs ${childTask} in ${childDir}."
+        workingDir = file(childDir)
+        commandLine(wrapperCommand(childTask))
+    }
+}
+
+registerChildTask('compileFabric', 'fabric', 'compileJava')
+registerChildTask('compileForgeNeoForge', 'forge-neoforge', 'compileJava')
+registerChildTask('buildFabric', 'fabric', 'build')
+registerChildTask('buildForgeNeoForge', 'forge-neoforge', 'build')
+registerChildTask('cleanFabric', 'fabric', 'clean')
+registerChildTask('cleanForgeNeoForge', 'forge-neoforge', 'clean')
+
+tasks.register('compileAll') {
+    group = 'linearreader'
+    description = 'Compiles both loader targets.'
+    dependsOn 'compileFabric', 'compileForgeNeoForge'
+}
+
+tasks.register('buildForge') {
+    group = 'linearreader'
+    description = 'Alias for buildForgeNeoForge.'
+    dependsOn 'buildForgeNeoForge'
+}
+
+tasks.register('buildAll') {
+    group = 'linearreader'
+    description = 'Builds both loader targets.'
+    dependsOn 'buildFabric', 'buildForgeNeoForge'
+}
+
+tasks.register('cleanAll') {
+    group = 'linearreader'
+    description = 'Cleans both loader targets.'
+    dependsOn 'cleanFabric', 'cleanForgeNeoForge'
+}
+
+tasks.register('collectJars', Copy) {
+    group = 'linearreader'
+    description = 'Collects built mod jars from all loader targets into root/build/collected-jars.'
+    dependsOn 'buildAll'
+    into layout.buildDirectory.dir('collected-jars')
+
+    from('fabric/build/libs') {
+        include '*.jar'
+        exclude '*-sources.jar', '*-javadoc.jar'
+        into 'fabric'
+    }
+
+    from('forge-neoforge/build/libs') {
+        include '*.jar'
+        exclude '*-sources.jar', '*-javadoc.jar'
+        into 'forge-neoforge'
+    }
+}

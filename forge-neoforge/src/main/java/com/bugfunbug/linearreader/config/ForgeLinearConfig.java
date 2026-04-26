@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.config;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import net.minecraftforge.common.ForgeConfigSpec;
 import net.minecraftforge.fml.loading.FMLPaths;
 
@@ -11,7 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Shared Forge/NeoForge config registration for LinearReader.
+ * Shared Forge/NeoForge config registration for LinearRuntime.
  *
  * Owns the ForgeConfigSpec-backed config and pushes current values into
  * LinearConfig on load and on change so all mod logic stays loader-agnostic.
@@ -271,7 +271,7 @@ public final class ForgeLinearConfig {
             Files.createDirectories(path.getParent());
             Files.write(path, lines);
         } catch (IOException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Failed to rewrite Forge/NeoForge config {}: {}",
                     path.getFileName(), e.getMessage());
         }

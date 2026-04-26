@@ -1,11 +1,10 @@
 package com.bugfunbug.linearreader.command;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -38,7 +37,7 @@ public final class BackupSyncer {
         }
 
         MinecraftServer server = source.getServer();
-        Path worldRoot = server.getWorldPath(LevelResource.ROOT);
+        Path worldRoot = LinearRuntime.resolveWorldRoot(server);
         source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(
                 "§6[LinearReader] Starting backup sync analysis. "
                         + "This is a dry run; no backups will be changed yet."), false);
@@ -113,7 +112,7 @@ public final class BackupSyncer {
             try {
                 oldBackupSize = Files.size(backupPath);
             } catch (IOException e) {
-                LinearReader.LOGGER.warn("[LinearReader] backup sync skipped {}: {}",
+                LinearRuntime.LOGGER.warn("[LinearReader] backup sync skipped {}: {}",
                         worldRoot.relativize(linearPath), e.getMessage());
                 continue;
             }
@@ -136,7 +135,7 @@ public final class BackupSyncer {
             try {
                 oldBackupSize = Files.size(backupPath);
             } catch (IOException e) {
-                LinearReader.LOGGER.warn("[LinearReader] backup sync skipped orphan {}: {}",
+                LinearRuntime.LOGGER.warn("[LinearReader] backup sync skipped orphan {}: {}",
                         worldRoot.relativize(backupPath), e.getMessage());
                 continue;
             }
@@ -230,17 +229,17 @@ public final class BackupSyncer {
                     long newSize = Files.size(plan.backupPath());
                     backupDeltaBytes += oldSize - newSize;
                     refreshed++;
-                    LinearReader.LOGGER.warn("[LinearReader] backup sync refreshed {}", plan.relativePath());
+                    LinearRuntime.LOGGER.warn("[LinearReader] backup sync refreshed {}", plan.relativePath());
                     continue;
                 }
 
                 if (Files.deleteIfExists(plan.backupPath())) {
                     backupDeltaBytes += plan.oldBackupSize();
                     deletedOrphans++;
-                    LinearReader.LOGGER.warn("[LinearReader] backup sync deleted orphan {}", plan.relativePath());
+                    LinearRuntime.LOGGER.warn("[LinearReader] backup sync deleted orphan {}", plan.relativePath());
                 }
             } catch (IOException e) {
-                LinearReader.LOGGER.error("[LinearReader] backup sync failed for {}: {}",
+                LinearRuntime.LOGGER.error("[LinearReader] backup sync failed for {}: {}",
                         plan.relativePath(), e.getMessage(), e);
                 send(source, "§c[LinearReader] backup sync failed for " + plan.relativePath() + ": " + e.getMessage());
                 return;
@@ -283,7 +282,7 @@ public final class BackupSyncer {
                     .sorted(Comparator.comparing(Path::toString))
                     .forEach(files::add);
         } catch (IOException e) {
-            LinearReader.LOGGER.warn("[LinearReader] backup sync could not walk world directory: {}", e.getMessage());
+            LinearRuntime.LOGGER.warn("[LinearReader] backup sync could not walk world directory: {}", e.getMessage());
         }
         return files;
     }
@@ -296,7 +295,7 @@ public final class BackupSyncer {
                     .sorted(Comparator.comparing(Path::toString))
                     .forEach(files::add);
         } catch (IOException e) {
-            LinearReader.LOGGER.warn("[LinearReader] backup sync could not walk backup files: {}", e.getMessage());
+            LinearRuntime.LOGGER.warn("[LinearReader] backup sync could not walk backup files: {}", e.getMessage());
         }
         return files;
     }

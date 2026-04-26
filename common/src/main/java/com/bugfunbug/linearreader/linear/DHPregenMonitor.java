@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.linear;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
@@ -132,7 +132,7 @@ public final class DHPregenMonitor {
         DHLogAppender appender = new DHLogAppender();
         appender.start();
         root.addAppender(appender);
-        LinearReader.LOGGER.debug("DHPregenMonitor installed.");
+        LinearRuntime.LOGGER.debug("DHPregenMonitor installed.");
     }
 
     /**
@@ -144,12 +144,12 @@ public final class DHPregenMonitor {
      */
     public static void notifyServerStopping() {
         if (PREGEN_ACTIVE.compareAndSet(true, false)) {
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "Server stopping during DH pregen — pregen-mode overrides deactivated.");
         }
         int chunkyWas = CHUNKY_ACTIVE_TASKS.getAndSet(0);
         if (chunkyWas > 0) {
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "Server stopping with {} Chunky task(s) active — "
                             + "Chunky pregen-mode deactivated.", chunkyWas);
         }
@@ -244,7 +244,7 @@ public final class DHPregenMonitor {
      * cancelled"), so the appender's filter passes it through harmlessly.
      */
     private static void logAsync(String msg) {
-        Thread t = new Thread(() -> LinearReader.LOGGER.info(msg), "lr-dh-log");
+        Thread t = new Thread(() -> LinearRuntime.LOGGER.info(msg), "lr-dh-log");
         t.setDaemon(true);
         t.start();
     }

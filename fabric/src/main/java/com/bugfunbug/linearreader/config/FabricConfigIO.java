@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader.config;
 
-import com.bugfunbug.linearreader.LinearReader;
+import com.bugfunbug.linearreader.LinearRuntime;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
@@ -45,7 +45,7 @@ public final class FabricConfigIO {
         config.validate();
         if (save(config) && migratedFromJson) {
             deleteLegacyJson(legacyJsonPath);
-            LinearReader.LOGGER.info(
+            LinearRuntime.LOGGER.info(
                     "[LinearReader] Migrated Fabric config from {} to {}.",
                     legacyJsonPath.getFileName(), tomlPath.getFileName());
         }
@@ -118,7 +118,7 @@ public final class FabricConfigIO {
             Files.write(path, lines);
             return true;
         } catch (IOException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Failed to write Fabric config {}: {}",
                     path.getFileName(), e.getMessage());
             return false;
@@ -159,7 +159,7 @@ public final class FabricConfigIO {
                 }
             }
         } catch (IOException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Failed to read Fabric config {}: {}. Using defaults.",
                     path.getFileName(), e.getMessage());
         }
@@ -174,7 +174,7 @@ public final class FabricConfigIO {
                 config = loaded;
             }
         } catch (IOException | JsonParseException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Failed to read legacy Fabric config {}: {}. Using defaults.",
                     path.getFileName(), e.getMessage());
         }
@@ -190,7 +190,7 @@ public final class FabricConfigIO {
         try {
             return Integer.parseInt(value);
         } catch (NumberFormatException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Invalid integer for Fabric config key {}: {}. Keeping {}.",
                     key, value, fallback);
             return fallback;
@@ -201,7 +201,7 @@ public final class FabricConfigIO {
         if ("true".equalsIgnoreCase(value)) return true;
         if ("false".equalsIgnoreCase(value)) return false;
 
-        LinearReader.LOGGER.warn(
+        LinearRuntime.LOGGER.warn(
                 "[LinearReader] Invalid boolean for Fabric config key {}: {}. Keeping {}.",
                 key, value, fallback);
         return fallback;
@@ -237,7 +237,7 @@ public final class FabricConfigIO {
         try {
             Files.deleteIfExists(legacyJsonPath);
         } catch (IOException e) {
-            LinearReader.LOGGER.warn(
+            LinearRuntime.LOGGER.warn(
                     "[LinearReader] Failed to delete legacy Fabric config {} after migration: {}",
                     legacyJsonPath.getFileName(), e.getMessage());
         }

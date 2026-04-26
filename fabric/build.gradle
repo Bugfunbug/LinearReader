@@ -15,6 +15,12 @@ java {
 	withSourcesJar()
 }
 
+sourceSets {
+	main {
+		java.srcDir "../common/src/main/java"
+	}
+}
+
 loom {
 	mixin {
 		defaultRefmapName = "linearreader.refmap.json"

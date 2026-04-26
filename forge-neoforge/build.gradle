@@ -14,6 +14,8 @@ base {
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
+sourceSets.main.java.srcDir '../common/src/main/java'
+
 configurations {
     zstdRuntime
 }
