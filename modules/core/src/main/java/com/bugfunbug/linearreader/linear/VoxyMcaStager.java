@@ -35,7 +35,7 @@ public final class VoxyMcaStager {
 
     private static final String MANIFEST_NAME = "linearreader-voxy-compat-manifest.txt";
     private static final String STATE_NAME = "linearreader-voxy-compat-state.properties";
-    private static final int DEFAULT_BATCH_FILES = 32;
+    private static final int DEFAULT_BATCH_FILES = 4;
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static volatile Thread worker;
@@ -169,6 +169,14 @@ public final class VoxyMcaStager {
     }
 
     public static CleanupResult cleanup(Path worldRoot) throws IOException {
+        return deleteManifestEntries(worldRoot, true);
+    }
+
+    public static CleanupResult abort(Path worldRoot) throws IOException {
+        return deleteManifestEntries(worldRoot, false);
+    }
+
+    private static CleanupResult deleteManifestEntries(Path worldRoot, boolean advanceState) throws IOException {
         if (RUNNING.get()) {
             throw new IllegalStateException("Voxy MCA staging is still running.");
         }
@@ -230,7 +238,7 @@ public final class VoxyMcaStager {
 
         boolean manifestDeleted = false;
         if (failed == 0) {
-            if (stateRegion != null && stateLastPrepared != null) {
+            if (advanceState && stateRegion != null && stateLastPrepared != null) {
                 Path regionFolder = normalizedRoot.resolve(stateRegion).normalize();
                 if (regionFolder.startsWith(normalizedRoot)) {
                     writeState(regionFolder, new PrepareState(stateLastPrepared, stateComplete));
@@ -293,8 +301,7 @@ public final class VoxyMcaStager {
                 StandardOpenOption.WRITE);
         recordBatchState(worldRoot, manifest, regionFolder, selection.lastPreparedFile(), selection.complete());
 
-        int threadCount = Math.min(batchFiles.size(),
-                Math.max(1, Math.min(Runtime.getRuntime().availableProcessors() / 2, 4)));
+        int threadCount = 1;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
             Thread thread = new Thread(r, "lr-voxy-mca-stage-worker");
             thread.setDaemon(true);

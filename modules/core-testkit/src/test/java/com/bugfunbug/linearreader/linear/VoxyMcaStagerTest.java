@@ -115,6 +115,54 @@ class VoxyMcaStagerTest {
         assertTrue(VoxyMcaStager.lastBatchComplete());
     }
 
+    @Test
+    void abortRemovesBatchWithoutAdvancingState() throws Exception {
+        Path worldRoot = tempDir.resolve("aborted-world");
+        Path regionFolder = worldRoot.resolve("region");
+        LinearTestData.writeRegion(
+                regionFolder.resolve("r.0.0.linear"),
+                Map.of(new ChunkPos(0, 0), LinearTestData.simpleChunk("first", 0, 0))
+        );
+        LinearTestData.writeRegion(
+                regionFolder.resolve("r.0.1.linear"),
+                Map.of(new ChunkPos(0, 32), LinearTestData.simpleChunk("second", 0, 32))
+        );
+
+        assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
+        waitForStaging();
+        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
+
+        VoxyMcaStager.CleanupResult abort = VoxyMcaStager.abort(worldRoot);
+        assertEquals(1, abort.deleted());
+        assertFalse(Files.exists(regionFolder.resolve("r.0.0.mca")));
+
+        assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
+        waitForStaging();
+        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(regionFolder.resolve("r.0.1.mca")));
+    }
+
+    @Test
+    void defaultPrepareKeepsBatchSmallForVoxyMemoryUse() throws Exception {
+        Path worldRoot = tempDir.resolve("small-batch-world");
+        Path regionFolder = worldRoot.resolve("region");
+        for (int z = 0; z < VoxyMcaStager.defaultBatchFiles() + 1; z++) {
+            LinearTestData.writeRegion(
+                    regionFolder.resolve("r.0." + z + ".linear"),
+                    Map.of(new ChunkPos(0, z * 32), LinearTestData.simpleChunk("batch-" + z, 0, z * 32))
+            );
+        }
+
+        assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder));
+        waitForStaging();
+
+        assertEquals(VoxyMcaStager.defaultBatchFiles(), VoxyMcaStager.filesTotal());
+        for (int z = 0; z < VoxyMcaStager.defaultBatchFiles(); z++) {
+            assertTrue(Files.exists(regionFolder.resolve("r.0." + z + ".mca")));
+        }
+        assertFalse(Files.exists(regionFolder.resolve("r.0." + VoxyMcaStager.defaultBatchFiles() + ".mca")));
+    }
+
     private static void waitForStaging() throws InterruptedException, IOException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (VoxyMcaStager.isRunning() && System.nanoTime() < deadline) {

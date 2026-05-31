@@ -10,15 +10,21 @@ import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 public final class VoxyCompatAutoImporter {
+
+    private static final int VOXY_SAVE_BACKLOG_LOW_WATERMARK = 100;
+    private static final long VOXY_SAVE_BACKLOG_STATUS_INTERVAL_MS = 5_000L;
+    private static final long BETWEEN_BATCH_COOLDOWN_MS = 2_000L;
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static volatile Thread worker;
@@ -85,6 +91,13 @@ public final class VoxyCompatAutoImporter {
             Path worldRoot = server.getWorldPath(LevelResource.ROOT);
             Path regionFolder = DimensionType.getStorageFolder(level.dimension(), worldRoot).resolve("region");
 
+            if (FabricLoader.getInstance().isModLoaded("c2me-opts-accel-opencl")) {
+                post("[LinearReader] C2ME OpenCL is loaded. If world loading or Voxy import stalls, disable c2me-opts-accel-opencl and retry.");
+            }
+
+            post("[LinearReader] Saving loaded chunks before Voxy auto import starts...");
+            saveAllChunks(server);
+
             while (!Thread.currentThread().isInterrupted()) {
                 batches++;
                 post("[LinearReader] Preparing Voxy batch " + batches + "...");
@@ -93,8 +106,6 @@ public final class VoxyCompatAutoImporter {
                     post("[LinearReader] Removed stale Voxy batch files: deleted " + staleCleanup.deleted()
                             + ", failed " + staleCleanup.failed() + ".");
                 }
-
-                saveAllChunks(server);
 
                 VoxyMcaStager.StartResult prepareResult =
                         VoxyMcaStager.start(worldRoot, regionFolder, VoxyMcaStager.defaultBatchFiles());
@@ -105,7 +116,14 @@ public final class VoxyCompatAutoImporter {
 
                 waitForPrepare();
                 if (!VoxyMcaStager.lastError().isEmpty()) {
+                    VoxyMcaStager.abort(worldRoot);
                     post("[LinearReader] Voxy auto import stopped: prepare failed: " + VoxyMcaStager.lastError());
+                    return;
+                }
+                if (VoxyMcaStager.filesFailed() > 0) {
+                    VoxyMcaStager.abort(worldRoot);
+                    post("[LinearReader] Voxy auto import stopped: "
+                            + VoxyMcaStager.filesFailed() + " region file(s) failed to prepare.");
                     return;
                 }
 
@@ -116,10 +134,20 @@ public final class VoxyCompatAutoImporter {
                     return;
                 }
 
+                long mcaFiles = countRegionMcaFiles(regionFolder);
+                if (mcaFiles > prepared) {
+                    VoxyMcaStager.abort(worldRoot);
+                    post("[LinearReader] Voxy auto import stopped: found " + mcaFiles + " .mca region file(s), but only "
+                            + prepared + " were staged by LinearReader. Voxy would import too much at once.");
+                    return;
+                }
+
                 post("[LinearReader] Starting Voxy import for batch " + batches
                         + " (" + prepared + " prepared, " + skipped + " skipped)...");
                 VoxyImportHandle importHandle = VoxyReflection.startImport(regionFolder.toFile());
                 waitForVoxy(importHandle);
+
+                waitForVoxySavingBacklog(importHandle, batches);
 
                 post("[LinearReader] Voxy finished batch " + batches + "; cleaning temporary .mca files...");
                 VoxyMcaStager.CleanupResult cleanup = VoxyMcaStager.cleanup(worldRoot);
@@ -133,6 +161,7 @@ public final class VoxyCompatAutoImporter {
                     post("[LinearReader] Voxy auto import complete after " + batches + " batch(es).");
                     return;
                 }
+                Thread.sleep(BETWEEN_BATCH_COOLDOWN_MS);
             }
         } catch (Throwable throwable) {
             LinearRuntime.LOGGER.warn("[LinearReader] Voxy auto import failed", throwable);
@@ -168,6 +197,50 @@ public final class VoxyCompatAutoImporter {
         }
     }
 
+    private static void waitForVoxySavingBacklog(VoxyImportHandle handle, int batch) throws Exception {
+        long lastStatus = 0L;
+        while (!Thread.currentThread().isInterrupted()) {
+            int tasks = handle.savingTaskCount();
+            if (tasks <= VOXY_SAVE_BACKLOG_LOW_WATERMARK) {
+                return;
+            }
+
+            long now = System.currentTimeMillis();
+            if (now - lastStatus >= VOXY_SAVE_BACKLOG_STATUS_INTERVAL_MS) {
+                post("[LinearReader] Waiting for Voxy save queue after batch " + batch
+                        + " (" + tasks + " queued)...");
+                lastStatus = now;
+            }
+            Thread.sleep(500L);
+        }
+        throw new InterruptedException("Voxy auto import interrupted while waiting for save queue.");
+    }
+
+    private static long countRegionMcaFiles(Path regionFolder) throws IOException {
+        try (var files = Files.list(regionFolder)) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> isRegionMcaName(path.getFileName().toString()))
+                    .count();
+        }
+    }
+
+    private static boolean isRegionMcaName(String name) {
+        if (!name.startsWith("r.") || !name.endsWith(".mca")) {
+            return false;
+        }
+        String[] parts = name.split("\\.");
+        if (parts.length != 4) {
+            return false;
+        }
+        try {
+            Integer.parseInt(parts[1]);
+            Integer.parseInt(parts[2]);
+            return true;
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+    }
+
     private static void post(String message) {
         status = message;
         LinearRuntime.LOGGER.info(message);
@@ -179,9 +252,14 @@ public final class VoxyCompatAutoImporter {
         });
     }
 
-    private record VoxyImportHandle(Object importer, Method isRunningMethod) {
+    private record VoxyImportHandle(Object importer, Method isRunningMethod,
+                                    Object savingService, Method getTaskCountMethod) {
         boolean isRunning() throws Exception {
             return (Boolean) isRunningMethod.invoke(importer);
+        }
+
+        int savingTaskCount() throws Exception {
+            return (Integer) getTaskCountMethod.invoke(savingService);
         }
     }
 
@@ -209,6 +287,9 @@ public final class VoxyCompatAutoImporter {
             Object serviceManager = getServiceManager.invoke(instance);
             Field runCheckerField = findField(instance.getClass(), "savingServiceRateLimiter");
             BooleanSupplier runChecker = (BooleanSupplier) runCheckerField.get(instance);
+            Field savingServiceField = findField(instance.getClass(), "savingService");
+            Object savingService = savingServiceField.get(instance);
+            Method getTaskCount = savingService.getClass().getMethod("getTaskCount");
 
             Class<?> worldEngineClass = Class.forName("me.cortex.voxy.common.world.WorldEngine");
             Class<?> serviceManagerClass = Class.forName("me.cortex.voxy.common.thread.ServiceManager");
@@ -232,7 +313,8 @@ public final class VoxyCompatAutoImporter {
                 throw new IllegalStateException("Voxy already has an active import for this world.");
             }
 
-            return new VoxyImportHandle(importer, worldImporterClass.getMethod("isRunning"));
+            return new VoxyImportHandle(importer, worldImporterClass.getMethod("isRunning"),
+                    savingService, getTaskCount);
         }
 
         private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
