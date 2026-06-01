@@ -7,7 +7,6 @@ import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearExporter;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
-import com.bugfunbug.linearreader.linear.VoxyMcaStager;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -86,12 +85,6 @@ public final class LinearCommandRegistrar {
                                         .executes(LinearCommandRegistrar::executeExportStart))
                                 .then(Commands.literal("stop")
                                         .executes(LinearCommandRegistrar::executeExportStop)))
-                        .then(Commands.literal("voxy-compat")
-                                .executes(LinearCommandRegistrar::executeVoxyCompatStatus)
-                                .then(Commands.literal("prepare")
-                                        .executes(LinearCommandRegistrar::executeVoxyCompatPrepare))
-                                .then(Commands.literal("cleanup")
-                                        .executes(LinearCommandRegistrar::executeVoxyCompatCleanup)))
         );
     }
 
@@ -630,142 +623,6 @@ public final class LinearCommandRegistrar {
         ctx.getSource().sendSuccess(() -> Component.literal(
                 "§e[LinearReader] Export stop requested. Already-exported files are kept."), false);
         return 1;
-    }
-
-    // ---------------------------------------------------------------------------
-    // /linearreader voxy-compat
-    // ---------------------------------------------------------------------------
-    private static int executeVoxyCompatStatus(CommandContext<CommandSourceStack> ctx) {
-        if (!ensureVoxyCompatSupported(ctx.getSource())) {
-            return 0;
-        }
-
-        if (VoxyMcaStager.isRunning()) {
-            int done = VoxyMcaStager.filesDone();
-            int total = VoxyMcaStager.filesTotal();
-            int pct = total == 0 ? 0 : done * 100 / total;
-            String status = "§a[LinearReader] Voxy compatibility prepare running: §f" + done + "/" + total
-                    + " §a(" + pct + "%)"
-                    + "§a  written §f" + VoxyMcaStager.filesWritten()
-                    + "§a  skipped §f" + VoxyMcaStager.filesSkipped()
-                    + (VoxyMcaStager.filesFailed() > 0
-                    ? "§c  failed §f" + VoxyMcaStager.filesFailed()
-                    : "");
-            ctx.getSource().sendSuccess(() -> Component.literal(status), false);
-            return 1;
-        }
-
-        String status = "§7[LinearReader] No Voxy compatibility prepare running. "
-                + "Use §f/linearreader voxy-compat prepare§7, then §f/voxy import current§7, "
-                + "then §f/linearreader voxy-compat cleanup§7. "
-                + "Each prepare stages up to §f" + VoxyMcaStager.defaultBatchFiles() + "§7 region file(s).";
-        if (VoxyMcaStager.filesTotal() > 0) {
-            status += "\n§7Last run: written §f" + VoxyMcaStager.filesWritten()
-                    + "§7, skipped §f" + VoxyMcaStager.filesSkipped()
-                    + "§7, failed §f" + VoxyMcaStager.filesFailed();
-            if (VoxyMcaStager.lastBatchComplete()) {
-                status += "§a. Current dimension has no more known batches.";
-            }
-            if (!VoxyMcaStager.lastError().isEmpty()) {
-                status += "§c (" + VoxyMcaStager.lastError() + ")";
-            }
-        }
-        final String statusMsg = status;
-        ctx.getSource().sendSuccess(() -> Component.literal(statusMsg), false);
-        return 0;
-    }
-
-    private static int executeVoxyCompatPrepare(CommandContext<CommandSourceStack> ctx) {
-        CommandSourceStack source = ctx.getSource();
-        if (!ensureVoxyCompatSupported(source)) {
-            return 0;
-        }
-
-        Path worldRoot = LinearRuntime.getWorldRoot();
-        if (worldRoot == null) {
-            source.sendFailure(Component.literal("[LinearReader] World root not set."));
-            return 0;
-        }
-
-        Path regionFolder = LinearRuntime.regionFolderForDimension(source.getLevel().dimension());
-        if (regionFolder == null) {
-            source.sendFailure(Component.literal("[LinearReader] Could not resolve current dimension region folder."));
-            return 0;
-        }
-
-        source.getServer().saveAllChunks(false, true, false);
-
-        try {
-            VoxyMcaStager.StartResult result = VoxyMcaStager.start(worldRoot, regionFolder);
-            switch (result) {
-                case STARTED -> {
-                    source.sendSuccess(() -> Component.literal(
-                                    "§a[LinearReader] Voxy compatibility prepare started for the current dimension.\n"
-                                            + "§7Wait for §f/linearreader voxy-compat§7 to finish, then run §f/voxy import current§7. "
-                                            + "After Voxy completes, run §f/linearreader voxy-compat cleanup§7, "
-                                            + "then prepare again for the next batch."),
-                            false);
-                    return 1;
-                }
-                case ALREADY_RUNNING -> source.sendFailure(Component.literal(
-                        "[LinearReader] Voxy compatibility prepare is already running. Check /linearreader voxy-compat"));
-                case CLEANUP_REQUIRED -> source.sendFailure(Component.literal(
-                        "[LinearReader] A Voxy compatibility manifest already exists. "
-                                + "Run /linearreader voxy-compat cleanup before preparing again."));
-                case REGION_FOLDER_MISSING -> source.sendFailure(Component.literal(
-                        "[LinearReader] Current dimension region folder does not exist: " + regionFolder));
-            }
-        } catch (IOException e) {
-            source.sendFailure(Component.literal("[LinearReader] Could not start Voxy compatibility prepare: " + e.getMessage()));
-        }
-        return 0;
-    }
-
-    private static int executeVoxyCompatCleanup(CommandContext<CommandSourceStack> ctx) {
-        CommandSourceStack source = ctx.getSource();
-        if (!ensureVoxyCompatSupported(source)) {
-            return 0;
-        }
-        if (VoxyMcaStager.isRunning()) {
-            source.sendFailure(Component.literal("[LinearReader] Wait for Voxy compatibility prepare to finish before cleanup."));
-            return 0;
-        }
-
-        Path worldRoot = LinearRuntime.getWorldRoot();
-        if (worldRoot == null) {
-            source.sendFailure(Component.literal("[LinearReader] World root not set."));
-            return 0;
-        }
-
-        try {
-            VoxyMcaStager.CleanupResult result = VoxyMcaStager.cleanup(worldRoot);
-            if (!result.manifestDeleted() && result.deleted() == 0 && result.missing() == 0 && result.failed() == 0) {
-                source.sendSuccess(() -> Component.literal(
-                        "§7[LinearReader] No Voxy compatibility manifest found; nothing to clean."), false);
-                return 0;
-            }
-
-            String msg = "§a[LinearReader] Voxy compatibility cleanup complete: deleted §f" + result.deleted()
-                    + "§a, already gone §f" + result.missing()
-                    + (result.failed() > 0 ? "§c, failed §f" + result.failed() : "")
-                    + (result.manifestDeleted()
-                    ? "§a. Manifest removed."
-                    : "§e. Manifest kept because some files could not be deleted.");
-            source.sendSuccess(() -> Component.literal(msg), false);
-            return result.failed() == 0 ? 1 : 0;
-        } catch (IOException | IllegalStateException e) {
-            source.sendFailure(Component.literal("[LinearReader] Voxy compatibility cleanup failed: " + e.getMessage()));
-            return 0;
-        }
-    }
-
-    private static boolean ensureVoxyCompatSupported(CommandSourceStack source) {
-        if (LinearRuntime.supportsVoxyMcaStaging()) {
-            return true;
-        }
-        source.sendFailure(Component.literal(
-                "[LinearReader] Voxy compatibility prepare is only enabled on the Minecraft 1.21.11 target."));
-        return false;
     }
 
     // ---------------------------------------------------------------------------

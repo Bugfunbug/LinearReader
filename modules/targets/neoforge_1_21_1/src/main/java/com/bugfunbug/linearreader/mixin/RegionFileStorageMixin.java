@@ -90,6 +90,7 @@ public abstract class RegionFileStorageMixin {
         }
 
         Path linearPath = LinearRuntime.resolveLinearRegionPath(folder, pos);
+        LinearRuntime.convertLegacyRegionIfNeeded(folder, pos);
         LinearRegionFile region = new LinearRegionFile(linearPath, sync);
         linearCache.putAndMoveToFirst(key, region);
         return region;

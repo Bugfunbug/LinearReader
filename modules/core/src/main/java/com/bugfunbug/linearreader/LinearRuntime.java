@@ -4,6 +4,7 @@ import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.DHPregenMonitor;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
+import com.bugfunbug.linearreader.linear.MCAConverter;
 import com.bugfunbug.linearreader.linear.ZstdSupport;
 import com.bugfunbug.linearreader.minecraftapi.ChunkNbtAdapter;
 import com.bugfunbug.linearreader.minecraftapi.MinecraftFamily;
@@ -178,12 +179,12 @@ public final class LinearRuntime {
         return minecraftFamily().regionStorageHooks().resolveLinearRegionPath(regionFolder, chunkPos);
     }
 
-    public static ChunkNbtAdapter chunkNbtAdapter() {
-        return minecraftFamily().chunkNbtAdapter();
+    public static void convertLegacyRegionIfNeeded(Path regionFolder, ChunkPos chunkPos) throws IOException {
+        MCAConverter.convertRegionIfNeeded(regionFolder, chunkPos.getRegionX(), chunkPos.getRegionZ());
     }
 
-    public static boolean supportsVoxyMcaStaging() {
-        return minecraftFamily().supportsVoxyMcaStaging();
+    public static ChunkNbtAdapter chunkNbtAdapter() {
+        return minecraftFamily().chunkNbtAdapter();
     }
 
     public static RegionFile openVanillaRegionFile(Path regionFilePath, Path regionFolder, boolean sync)

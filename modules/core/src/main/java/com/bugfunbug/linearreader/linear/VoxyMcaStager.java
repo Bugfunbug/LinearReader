@@ -25,8 +25,8 @@ import java.util.stream.Stream;
  *
  * Voxy currently scans region folders for r.<x>.<z>.mca and parses the Anvil
  * sector table directly. It does not know how to import .linear files. This
- * bridge stages .mca sidecars next to the current dimension's .linear files,
- * then removes only those sidecars after the user has run /voxy import current.
+ * bridge stages .mca sidecars next to the current dimension's .linear files.
+ * The Fabric 1.21.11 auto importer owns running Voxy and removing staged files.
  */
 public final class VoxyMcaStager {
 
@@ -297,7 +297,7 @@ public final class VoxyMcaStager {
         }
 
         if (batchFiles.isEmpty()) {
-            LinearRuntime.LOGGER.info("[LinearReader] Voxy compatibility prepare is complete for {}.", regionFolder);
+            LinearRuntime.LOGGER.info("[LinearReader] Voxy compatibility staging is complete for {}.", regionFolder);
             writeState(regionFolder, new PrepareState(state.lastPreparedFile(), true));
             lastBatchComplete = true;
             return;
@@ -305,8 +305,8 @@ public final class VoxyMcaStager {
 
         Files.writeString(manifest,
                 "# LinearReader Voxy MCA staging manifest\n"
-                        + "# Run /linearreader voxy-compat cleanup after /voxy import current finishes.\n"
-                        + "# Next prepare advances to the following batch.\n"
+                        + "# Auto import removes these files after Voxy finishes the batch.\n"
+                        + "# Next staging pass advances to the following batch after cleanup.\n"
                         + "# Only files listed here are eligible for cleanup.\n",
                 StandardOpenOption.CREATE_NEW,
                 StandardOpenOption.WRITE);
@@ -405,7 +405,7 @@ public final class VoxyMcaStager {
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING,
                 StandardOpenOption.WRITE)) {
-            properties.store(output, "LinearReader Voxy compatibility prepare state");
+            properties.store(output, "LinearReader Voxy compatibility staging state");
         }
     }
 

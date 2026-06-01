@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.voxy;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -17,9 +18,29 @@ public final class VoxyCompatClientCommands {
 
     static void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
         dispatcher.register(ClientCommandManager.literal("linearreader")
+                .executes(ctx -> forwardToServer(ctx.getSource(), "linearreader"))
                 .then(ClientCommandManager.literal("voxy-compat")
+                        .executes(ctx -> executeStatus(ctx.getSource()))
                         .then(ClientCommandManager.literal("auto")
-                                .executes(ctx -> executeAuto(ctx.getSource())))));
+                                .executes(ctx -> executeAuto(ctx.getSource()))))
+                .then(ClientCommandManager.argument("serverCommand", StringArgumentType.greedyString())
+                        .executes(ctx -> forwardToServer(ctx.getSource(),
+                                "linearreader " + StringArgumentType.getString(ctx, "serverCommand")))));
+    }
+
+    private static int forwardToServer(FabricClientCommandSource source, String command) {
+        var connection = source.getClient().getConnection();
+        if (connection == null) {
+            source.sendError(Component.literal("[LinearReader] No server connection is available."));
+            return 0;
+        }
+        connection.sendCommand(command);
+        return 1;
+    }
+
+    private static int executeStatus(FabricClientCommandSource source) {
+        source.sendFeedback(Component.literal(VoxyCompatAutoImporter.status()));
+        return 1;
     }
 
     private static int executeAuto(FabricClientCommandSource source) {

@@ -98,6 +98,7 @@ public abstract class RegionFileStorageMixin {
         }
 
         Path linearPath = LinearRuntime.resolveLinearRegionPath(folder, pos);
+        LinearRuntime.convertLegacyRegionIfNeeded(folder, pos);
 
         // Always cache a cheap shell, even for read-only probes on absent regions.
         // That keeps Files.exists/load checks off the coarse storage lock and avoids

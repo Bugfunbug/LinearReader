@@ -7,8 +7,8 @@ import net.minecraft.commands.CommandSourceStack;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class LinearCommandRegistrarTest {
 
@@ -18,20 +18,14 @@ class LinearCommandRegistrarTest {
     }
 
     @Test
-    void exposesVoxyCompatPrepareWithoutLegacyAlias() {
+    void omitsManualVoxyCompatCommands() {
         CommandDispatcher<CommandSourceStack> dispatcher = new CommandDispatcher<>();
         LinearCommandRegistrar.register(dispatcher, source -> true);
 
         CommandNode<CommandSourceStack> root = dispatcher.getRoot().getChild("linearreader");
         assertNotNull(root);
 
-        CommandNode<CommandSourceStack> voxyCompat = root.getChild("voxy-compat");
-        assertNotNull(voxyCompat);
-        assertNotNull(voxyCompat.getCommand(), "bare /linearreader voxy-compat should show status");
-        assertNotNull(voxyCompat.getChild("prepare"));
-        assertNotNull(voxyCompat.getChild("cleanup"));
-
-        assertNull(voxyCompat.getChild("start"));
+        assertNull(root.getChild("voxy-compat"));
         assertNull(root.getChild("voxy-mca"));
     }
 }

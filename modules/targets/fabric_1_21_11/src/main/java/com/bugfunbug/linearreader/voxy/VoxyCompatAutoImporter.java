@@ -115,43 +115,43 @@ public final class VoxyCompatAutoImporter {
                     return;
                 }
 
-                VoxyMcaStager.StartResult prepareResult =
+                VoxyMcaStager.StartResult stagingResult =
                         VoxyMcaStager.start(worldRoot, regionFolder, AUTO_BATCH_FILES, AUTO_BATCH_LINEAR_BYTES);
-                if (prepareResult != VoxyMcaStager.StartResult.STARTED) {
-                    post("[LinearReader] Voxy auto import stopped: prepare returned " + prepareResult + ".");
+                if (stagingResult != VoxyMcaStager.StartResult.STARTED) {
+                    post("[LinearReader] Voxy auto import stopped: staging returned " + stagingResult + ".");
                     return;
                 }
 
-                waitForPrepare();
+                waitForStaging();
                 if (!VoxyMcaStager.lastError().isEmpty()) {
                     VoxyMcaStager.abort(worldRoot);
-                    post("[LinearReader] Voxy auto import stopped: prepare failed: " + VoxyMcaStager.lastError());
+                    post("[LinearReader] Voxy auto import stopped: staging failed: " + VoxyMcaStager.lastError());
                     return;
                 }
                 if (VoxyMcaStager.filesFailed() > 0) {
                     VoxyMcaStager.abort(worldRoot);
                     post("[LinearReader] Voxy auto import stopped: "
-                            + VoxyMcaStager.filesFailed() + " region file(s) failed to prepare.");
+                            + VoxyMcaStager.filesFailed() + " region file(s) failed to stage.");
                     return;
                 }
 
-                int prepared = VoxyMcaStager.filesWritten();
+                int staged = VoxyMcaStager.filesWritten();
                 int skipped = VoxyMcaStager.filesSkipped();
                 if (VoxyMcaStager.filesTotal() == 0) {
-                    post("[LinearReader] Voxy auto import complete: no more .linear regions to prepare.");
+                    post("[LinearReader] Voxy auto import complete: no more .linear regions to stage.");
                     return;
                 }
 
                 long mcaFiles = countRegionMcaFiles(regionFolder);
-                if (mcaFiles > prepared) {
+                if (mcaFiles > staged) {
                     VoxyMcaStager.abort(worldRoot);
                     post("[LinearReader] Voxy auto import stopped: found " + mcaFiles + " .mca region file(s), but only "
-                            + prepared + " were staged by LinearReader. Voxy would import too much at once.");
+                            + staged + " were staged by LinearReader. Voxy would import too much at once.");
                     return;
                 }
 
                 post("[LinearReader] Starting Voxy import for batch " + batches
-                        + " (" + prepared + " prepared, " + skipped + " skipped)...");
+                        + " (" + staged + " staged, " + skipped + " skipped)...");
                 VoxyImportHandle importHandle = VoxyReflection.startImport(regionFolder.toFile());
                 waitForVoxy(importHandle);
 
@@ -192,7 +192,7 @@ public final class VoxyCompatAutoImporter {
         save.join();
     }
 
-    private static void waitForPrepare() throws InterruptedException {
+    private static void waitForStaging() throws InterruptedException {
         while (VoxyMcaStager.isRunning()) {
             Thread.sleep(100L);
         }

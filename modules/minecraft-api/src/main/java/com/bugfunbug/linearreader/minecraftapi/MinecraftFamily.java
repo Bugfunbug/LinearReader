@@ -11,8 +11,4 @@ public interface MinecraftFamily {
     RegionStorageHooks regionStorageHooks();
 
     ChunkNbtAdapter chunkNbtAdapter();
-
-    default boolean supportsVoxyMcaStaging() {
-        return false;
-    }
 }
