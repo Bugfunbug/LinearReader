@@ -16,9 +16,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
@@ -36,6 +33,7 @@ public final class VoxyMcaStager {
     private static final String MANIFEST_NAME = "linearreader-voxy-compat-manifest.txt";
     private static final String STATE_NAME = "linearreader-voxy-compat-state.properties";
     private static final int DEFAULT_BATCH_FILES = 4;
+    private static final long DEFAULT_BATCH_BYTES = Long.MAX_VALUE;
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static volatile Thread worker;
@@ -105,6 +103,10 @@ public final class VoxyMcaStager {
         return DEFAULT_BATCH_FILES;
     }
 
+    public static long defaultBatchBytes() {
+        return DEFAULT_BATCH_BYTES;
+    }
+
     public static Path manifestPath(Path worldRoot) {
         return worldRoot.resolve(MANIFEST_NAME);
     }
@@ -118,10 +120,18 @@ public final class VoxyMcaStager {
     }
 
     public static StartResult start(Path worldRoot, Path regionFolder, int maxFiles) throws IOException {
+        return start(worldRoot, regionFolder, maxFiles, DEFAULT_BATCH_BYTES);
+    }
+
+    public static StartResult start(Path worldRoot, Path regionFolder, int maxFiles, long maxLinearBytes)
+            throws IOException {
         Objects.requireNonNull(worldRoot, "worldRoot");
         Objects.requireNonNull(regionFolder, "regionFolder");
         if (maxFiles <= 0) {
             throw new IllegalArgumentException("maxFiles must be positive");
+        }
+        if (maxLinearBytes <= 0) {
+            throw new IllegalArgumentException("maxLinearBytes must be positive");
         }
 
         if (!Files.isDirectory(regionFolder)) {
@@ -152,7 +162,7 @@ public final class VoxyMcaStager {
 
         Thread thread = new Thread(() -> {
             try {
-                doStage(worldRoot, regionFolder, manifest, maxFiles);
+                doStage(worldRoot, regionFolder, manifest, maxFiles, maxLinearBytes);
             } catch (Exception e) {
                 lastError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
                 LinearRuntime.LOGGER.warn("[LinearReader] Voxy MCA staging failed: {}", lastError, e);
@@ -270,10 +280,11 @@ public final class VoxyMcaStager {
         FILES_FAILED.set(0);
     }
 
-    private static void doStage(Path worldRoot, Path regionFolder, Path manifest, int maxFiles) throws IOException {
+    private static void doStage(Path worldRoot, Path regionFolder, Path manifest, int maxFiles, long maxLinearBytes)
+            throws IOException {
         List<Path> linearFiles = collectLinearRegionFiles(regionFolder);
         PrepareState state = readState(regionFolder);
-        BatchSelection selection = selectBatch(linearFiles, state.lastPreparedFile(), maxFiles);
+        BatchSelection selection = selectBatch(linearFiles, state.lastPreparedFile(), maxFiles, maxLinearBytes);
         List<Path> batchFiles = selection.files();
         lastBatchComplete = selection.complete();
         FILES_TOTAL.set(batchFiles.size());
@@ -301,32 +312,11 @@ public final class VoxyMcaStager {
                 StandardOpenOption.WRITE);
         recordBatchState(worldRoot, manifest, regionFolder, selection.lastPreparedFile(), selection.complete());
 
-        int threadCount = 1;
-        ExecutorService executor = Executors.newFixedThreadPool(threadCount, r -> {
-            Thread thread = new Thread(r, "lr-voxy-mca-stage-worker");
-            thread.setDaemon(true);
-            thread.setPriority(Thread.MIN_PRIORITY + 1);
-            return thread;
-        });
-
-        try {
-            for (Path linearFile : batchFiles) {
-                executor.execute(() -> stageOne(worldRoot, regionFolder, manifest, linearFile));
+        for (Path linearFile : batchFiles) {
+            if (Thread.currentThread().isInterrupted()) {
+                return;
             }
-        } finally {
-            executor.shutdown();
-            try {
-                while (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
-                    if (Thread.currentThread().isInterrupted()) {
-                        executor.shutdownNow();
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
+            stageOne(worldRoot, regionFolder, manifest, linearFile);
         }
 
         LinearRuntime.LOGGER.info(
@@ -345,11 +335,14 @@ public final class VoxyMcaStager {
         return files;
     }
 
-    private static BatchSelection selectBatch(List<Path> linearFiles, String lastPreparedFile, int maxFiles) {
+    private static BatchSelection selectBatch(List<Path> linearFiles, String lastPreparedFile, int maxFiles,
+                                              long maxLinearBytes)
+            throws IOException {
         List<Path> selected = new ArrayList<>(Math.min(maxFiles, linearFiles.size()));
         boolean afterLast = lastPreparedFile == null || lastPreparedFile.isEmpty();
         String selectedLast = lastPreparedFile == null ? "" : lastPreparedFile;
         int selectedLastIndex = -1;
+        long selectedBytes = 0L;
 
         for (int i = 0; i < linearFiles.size(); i++) {
             Path file = linearFiles.get(i);
@@ -360,7 +353,12 @@ public final class VoxyMcaStager {
             if (!afterLast) {
                 continue;
             }
+            long fileSize = Math.max(1L, Files.size(file));
+            if (!selected.isEmpty() && selectedBytes + fileSize > maxLinearBytes) {
+                break;
+            }
             selected.add(file);
+            selectedBytes += fileSize;
             selectedLast = fileName;
             selectedLastIndex = i;
             if (selected.size() >= maxFiles) {

@@ -163,6 +163,30 @@ class VoxyMcaStagerTest {
         assertFalse(Files.exists(regionFolder.resolve("r.0." + VoxyMcaStager.defaultBatchFiles() + ".mca")));
     }
 
+    @Test
+    void prepareHonorsLinearByteLimit() throws Exception {
+        Path worldRoot = tempDir.resolve("byte-limited-world");
+        Path regionFolder = worldRoot.resolve("region");
+        Path first = regionFolder.resolve("r.0.0.linear");
+        Path second = regionFolder.resolve("r.0.1.linear");
+        LinearTestData.writeRegion(
+                first,
+                Map.of(new ChunkPos(0, 0), LinearTestData.simpleChunk("first", 0, 0))
+        );
+        LinearTestData.writeRegion(
+                second,
+                Map.of(new ChunkPos(0, 32), LinearTestData.simpleChunk("second", 0, 32))
+        );
+
+        assertEquals(VoxyMcaStager.StartResult.STARTED,
+                VoxyMcaStager.start(worldRoot, regionFolder, 10, Files.size(first)));
+        waitForStaging();
+
+        assertEquals(1, VoxyMcaStager.filesTotal());
+        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(regionFolder.resolve("r.0.1.mca")));
+    }
+
     private static void waitForStaging() throws InterruptedException, IOException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (VoxyMcaStager.isRunning() && System.nanoTime() < deadline) {

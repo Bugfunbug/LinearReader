@@ -24,7 +24,8 @@ public final class VoxyCompatAutoImporter {
 
     private static final int VOXY_SAVE_BACKLOG_LOW_WATERMARK = 100;
     private static final long VOXY_SAVE_BACKLOG_STATUS_INTERVAL_MS = 5_000L;
-    private static final long BETWEEN_BATCH_COOLDOWN_MS = 2_000L;
+    private static final int AUTO_BATCH_FILES = 16;
+    private static final long AUTO_BATCH_LINEAR_BYTES = 512L * 1024L * 1024L;
 
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
     private static volatile Thread worker;
@@ -107,8 +108,15 @@ public final class VoxyCompatAutoImporter {
                             + ", failed " + staleCleanup.failed() + ".");
                 }
 
+                long existingMcaFiles = countRegionMcaFiles(regionFolder);
+                if (existingMcaFiles > 0) {
+                    post("[LinearReader] Voxy auto import stopped: found " + existingMcaFiles
+                            + " existing .mca region file(s). Voxy would import those too, so auto mode will not continue.");
+                    return;
+                }
+
                 VoxyMcaStager.StartResult prepareResult =
-                        VoxyMcaStager.start(worldRoot, regionFolder, VoxyMcaStager.defaultBatchFiles());
+                        VoxyMcaStager.start(worldRoot, regionFolder, AUTO_BATCH_FILES, AUTO_BATCH_LINEAR_BYTES);
                 if (prepareResult != VoxyMcaStager.StartResult.STARTED) {
                     post("[LinearReader] Voxy auto import stopped: prepare returned " + prepareResult + ".");
                     return;
@@ -161,7 +169,6 @@ public final class VoxyCompatAutoImporter {
                     post("[LinearReader] Voxy auto import complete after " + batches + " batch(es).");
                     return;
                 }
-                Thread.sleep(BETWEEN_BATCH_COOLDOWN_MS);
             }
         } catch (Throwable throwable) {
             LinearRuntime.LOGGER.warn("[LinearReader] Voxy auto import failed", throwable);
