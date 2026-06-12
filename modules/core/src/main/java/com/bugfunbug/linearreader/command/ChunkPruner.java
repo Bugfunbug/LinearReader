@@ -4,6 +4,7 @@ import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.bugfunbug.linearreader.minecraftapi.ChunkNbtAdapter;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -581,17 +582,19 @@ public final class ChunkPruner {
     private static PlayerContext playerContextFor(CommandSourceStack source, Path worldRoot) {
         if (source.getEntity() == null) return null;
 
-        ChunkPos chunkPos = new ChunkPos(net.minecraft.core.BlockPos.containing(source.getPosition()));
+        ChunkPos chunkPos = ChunkPosCompat.containing(net.minecraft.core.BlockPos.containing(source.getPosition()));
         Path regionFolder = LinearRuntime.regionFolderForDimension(source.getLevel().dimension());
         String regionDirLabel = regionFolder != null && regionFolder.startsWith(worldRoot)
                 ? worldRoot.relativize(regionFolder).toString().replace('\\', '/')
                 : "region";
+        int chunkX = ChunkPosCompat.x(chunkPos);
+        int chunkZ = ChunkPosCompat.z(chunkPos);
         return new PlayerContext(
                 regionDirLabel,
-                chunkPos.x,
-                chunkPos.z,
-                chunkPos.x >> 5,
-                chunkPos.z >> 5
+                chunkX,
+                chunkZ,
+                chunkX >> 5,
+                chunkZ >> 5
         );
     }
 
@@ -690,12 +693,14 @@ public final class ChunkPruner {
     }
 
     private static String formatSampleChunk(SampleChunk sample, String reason) {
-        return sample.plan().regionLabel() + " @ chunk " + sample.chunkPos().x + ", " + sample.chunkPos().z
+        return sample.plan().regionLabel() + " @ chunk " + ChunkPosCompat.x(sample.chunkPos())
+                + ", " + ChunkPosCompat.z(sample.chunkPos())
                 + " §8(" + reason + ")";
     }
 
     private static String sampleKey(SampleChunk sample) {
-        return sample.plan().regionLabel() + "|" + sample.chunkPos().x + "|" + sample.chunkPos().z;
+        return sample.plan().regionLabel() + "|" + ChunkPosCompat.x(sample.chunkPos())
+                + "|" + ChunkPosCompat.z(sample.chunkPos());
     }
 
     private static String describeRegionDistance(RegionPlan plan, PlayerContext playerContext) {
@@ -718,8 +723,8 @@ public final class ChunkPruner {
     }
 
     private static long chunkDistanceSq(ChunkPos chunkPos, PlayerContext playerContext) {
-        long dx = (long) chunkPos.x - playerContext.chunkX();
-        long dz = (long) chunkPos.z - playerContext.chunkZ();
+        long dx = (long) ChunkPosCompat.x(chunkPos) - playerContext.chunkX();
+        long dz = (long) ChunkPosCompat.z(chunkPos) - playerContext.chunkZ();
         return dx * dx + dz * dz;
     }
 

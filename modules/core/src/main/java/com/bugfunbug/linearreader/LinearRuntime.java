@@ -9,6 +9,7 @@ import com.bugfunbug.linearreader.linear.ZstdSupport;
 import com.bugfunbug.linearreader.minecraftapi.ChunkNbtAdapter;
 import com.bugfunbug.linearreader.minecraftapi.MinecraftFamily;
 import com.bugfunbug.linearreader.minecraftapi.WorldPathResolver;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -714,6 +715,10 @@ public final class LinearRuntime {
             throw new IllegalStateException("MinecraftFamily was not installed before LinearRuntime use.");
         }
         return family;
+    }
+
+    public static boolean hasOperatorCommandPermission(CommandSourceStack source) {
+        return minecraftFamily().hasOperatorCommandPermission(source);
     }
 
     static record LegacyBackupMigrationResult(int moved, int deduped, int conflicts) {}

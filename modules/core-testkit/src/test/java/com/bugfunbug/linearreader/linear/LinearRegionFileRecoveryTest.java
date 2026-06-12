@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearTestSupport;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
@@ -102,7 +103,10 @@ class LinearRegionFileRecoveryTest {
         LinearRegionFile region = new LinearRegionFile(live, false);
         try {
             try (DataOutputStream out = region.write(pos)) {
-                NbtIo.write(LinearTestData.simpleChunk("backup-create", pos.x, pos.z), out);
+                NbtIo.write(LinearTestData.simpleChunk(
+                        "backup-create",
+                        ChunkPosCompat.x(pos),
+                        ChunkPosCompat.z(pos)), out);
             }
 
             region.flush(true);

@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearTestSupport;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtIo;
@@ -44,7 +45,7 @@ class LinearBackedRegionFileTest {
         try {
             LinearBackedRegionFile backed = LinearBackedRegionFile.create(region);
             ChunkPos pos = new ChunkPos(2, 3);
-            CompoundTag expected = testChunk(pos.x, pos.z);
+            CompoundTag expected = testChunk(ChunkPosCompat.x(pos), ChunkPosCompat.z(pos));
 
             byte[] encoded = encodeVanillaChunkBuffer(expected);
             ByteBuffer windowed = ByteBuffer.wrap(new byte[encoded.length + 23]);
@@ -76,7 +77,7 @@ class LinearBackedRegionFileTest {
             ChunkPos pos = new ChunkPos(2, 3);
 
             try (DataOutputStream out = backed.getChunkDataOutputStream(pos)) {
-                NbtIo.write(testChunk(pos.x, pos.z), out);
+                NbtIo.write(testChunk(ChunkPosCompat.x(pos), ChunkPosCompat.z(pos)), out);
             }
 
             backed.clearChunk(pos);

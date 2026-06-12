@@ -1,3 +1,5 @@
+import org.gradle.util.GradleVersion
+
 pluginManagement {
     repositories {
         maven {
@@ -22,23 +24,30 @@ pluginManagement {
 
 rootProject.name = "LinearReader-workspace"
 
+def gradle9OrNewer = GradleVersion.current() >= GradleVersion.version("9.0")
+
 include(":targets")
 project(":targets").projectDir = file("modules/targets")
 
-include(":targets:fabric_1_20_to_1_20_1")
-project(":targets:fabric_1_20_to_1_20_1").projectDir = file("modules/targets/fabric_1_20_to_1_20_1")
+if (gradle9OrNewer) {
+    include(":targets:fabric_26_1_to_26_1_2")
+    project(":targets:fabric_26_1_to_26_1_2").projectDir = file("modules/targets/fabric_26_1_to_26_1_2")
+} else {
+    include(":targets:fabric_1_20_to_1_20_1")
+    project(":targets:fabric_1_20_to_1_20_1").projectDir = file("modules/targets/fabric_1_20_to_1_20_1")
 
-include(":targets:fabric_1_20_2_to_1_21_4")
-project(":targets:fabric_1_20_2_to_1_21_4").projectDir = file("modules/targets/fabric_1_20_2_to_1_21_4")
+    include(":targets:fabric_1_20_2_to_1_21_4")
+    project(":targets:fabric_1_20_2_to_1_21_4").projectDir = file("modules/targets/fabric_1_20_2_to_1_21_4")
 
-include(":targets:fabric_1_21_5_to_1_21_10")
-project(":targets:fabric_1_21_5_to_1_21_10").projectDir = file("modules/targets/fabric_1_21_5_to_1_21_10")
+    include(":targets:fabric_1_21_5_to_1_21_10")
+    project(":targets:fabric_1_21_5_to_1_21_10").projectDir = file("modules/targets/fabric_1_21_5_to_1_21_10")
 
-include(":targets:fabric_1_21_11")
-project(":targets:fabric_1_21_11").projectDir = file("modules/targets/fabric_1_21_11")
+    include(":targets:fabric_1_21_11")
+    project(":targets:fabric_1_21_11").projectDir = file("modules/targets/fabric_1_21_11")
 
-include(":targets:forge_1_20_to_1_20_1")
-project(":targets:forge_1_20_to_1_20_1").projectDir = file("modules/targets/forge_1_20_to_1_20_1")
+    include(":targets:forge_1_20_to_1_20_1")
+    project(":targets:forge_1_20_to_1_20_1").projectDir = file("modules/targets/forge_1_20_to_1_20_1")
 
-include(":targets:neoforge_1_21_1")
-project(":targets:neoforge_1_21_1").projectDir = file("modules/targets/neoforge_1_21_1")
+    include(":targets:neoforge_1_21_1")
+    project(":targets:neoforge_1_21_1").projectDir = file("modules/targets/neoforge_1_21_1")
+}

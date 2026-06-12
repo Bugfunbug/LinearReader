@@ -1,37 +1,60 @@
+import org.gradle.util.GradleVersion
+
 plugins {
     id 'base'
 }
 
-def fabric1201Target = project(':targets:fabric_1_20_to_1_20_1')
-def fabric1202To1214Target = project(':targets:fabric_1_20_2_to_1_21_4')
-def fabric1215To12110Target = project(':targets:fabric_1_21_5_to_1_21_10')
-def fabric12111Target = project(':targets:fabric_1_21_11')
-def forge1201Target = project(':targets:forge_1_20_to_1_20_1')
-def neoforge1211Target = project(':targets:neoforge_1_21_1')
+def targetOrNull = { String path ->
+    findProject(path)
+}
+
+def requireIncludedTarget = { String label, Project target ->
+    if (target == null) {
+        throw new GradleException("${label} is not included in this Gradle runtime. "
+                + "Use Gradle 8 for Forge/NeoForge targets and Gradle 9 for Fabric 26.1.x.")
+    }
+}
+
+def fabric1201Target = targetOrNull(':targets:fabric_1_20_to_1_20_1')
+def fabric1202To1214Target = targetOrNull(':targets:fabric_1_20_2_to_1_21_4')
+def fabric1215To12110Target = targetOrNull(':targets:fabric_1_21_5_to_1_21_10')
+def fabric12111Target = targetOrNull(':targets:fabric_1_21_11')
+def fabric261To2612Target = targetOrNull(':targets:fabric_26_1_to_26_1_2')
+def forge1201Target = targetOrNull(':targets:forge_1_20_to_1_20_1')
+def neoforge1211Target = targetOrNull(':targets:neoforge_1_21_1')
+
+def fabricTargets = [
+        fabric1201Target,
+        fabric1202To1214Target,
+        fabric1215To12110Target,
+        fabric12111Target,
+        fabric261To2612Target
+].findAll { it != null }
+
+def forgeNeoForgeTargets = [forge1201Target, neoforge1211Target].findAll { it != null }
+def liveTargets = fabricTargets + forgeNeoForgeTargets
+
+def dependsOnTask = { Task task, List<Project> targets, String taskName ->
+    targets.each { target ->
+        task.dependsOn target.tasks.named(taskName)
+    }
+}
 
 tasks.register('compileAll') {
     group = 'linearreader'
-    description = 'Compiles all live targets.'
-    dependsOn fabric1201Target.tasks.named('compileJava')
-    dependsOn fabric1202To1214Target.tasks.named('compileJava')
-    dependsOn fabric1215To12110Target.tasks.named('compileJava')
-    dependsOn fabric12111Target.tasks.named('compileJava')
-    dependsOn forge1201Target.tasks.named('compileJava')
-    dependsOn neoforge1211Target.tasks.named('compileJava')
+    description = 'Compiles all live targets for this Gradle runtime.'
+    dependsOnTask(delegate, liveTargets, 'compileJava')
 }
 
 tasks.register('compileFabric') {
     group = 'linearreader'
-    description = 'Compiles all live Fabric targets.'
-    dependsOn fabric1201Target.tasks.named('compileJava')
-    dependsOn fabric1202To1214Target.tasks.named('compileJava')
-    dependsOn fabric1215To12110Target.tasks.named('compileJava')
-    dependsOn fabric12111Target.tasks.named('compileJava')
+    description = 'Compiles all live Fabric targets for this Gradle runtime.'
+    dependsOnTask(delegate, fabricTargets, 'compileJava')
 }
 
 tasks.register('compileForgeNeoForge') {
     group = 'linearreader'
-    description = 'Compiles all live Forge and NeoForge targets.'
+    description = 'Compiles all live Forge and NeoForge targets for this Gradle runtime.'
     dependsOn tasks.named('compileForge')
     dependsOn tasks.named('compileNeoForge')
 }
@@ -39,22 +62,29 @@ tasks.register('compileForgeNeoForge') {
 tasks.register('compileForge') {
     group = 'linearreader'
     description = 'Compiles the Forge target.'
-    dependsOn forge1201Target.tasks.named('compileJava')
+    if (forge1201Target != null) {
+        dependsOn forge1201Target.tasks.named('compileJava')
+    }
+    doFirst {
+        requireIncludedTarget('Forge target', forge1201Target)
+    }
 }
 
 tasks.register('compileNeoForge') {
     group = 'linearreader'
     description = 'Compiles the NeoForge target.'
-    dependsOn neoforge1211Target.tasks.named('compileJava')
+    if (neoforge1211Target != null) {
+        dependsOn neoforge1211Target.tasks.named('compileJava')
+    }
+    doFirst {
+        requireIncludedTarget('NeoForge target', neoforge1211Target)
+    }
 }
 
 tasks.register('buildFabric') {
     group = 'linearreader'
-    description = 'Builds all live Fabric targets.'
-    dependsOn fabric1201Target.tasks.named('build')
-    dependsOn fabric1202To1214Target.tasks.named('build')
-    dependsOn fabric1215To12110Target.tasks.named('build')
-    dependsOn fabric12111Target.tasks.named('build')
+    description = 'Builds all live Fabric targets for this Gradle runtime.'
+    dependsOnTask(delegate, fabricTargets, 'build')
 }
 
 tasks.register('buildForgeNeoForge') {
@@ -67,22 +97,29 @@ tasks.register('buildForgeNeoForge') {
 tasks.register('buildForge') {
     group = 'linearreader'
     description = 'Builds the Forge target.'
-    dependsOn forge1201Target.tasks.named('build')
+    if (forge1201Target != null) {
+        dependsOn forge1201Target.tasks.named('build')
+    }
+    doFirst {
+        requireIncludedTarget('Forge target', forge1201Target)
+    }
 }
 
 tasks.register('buildNeoForge') {
     group = 'linearreader'
     description = 'Builds the NeoForge target.'
-    dependsOn neoforge1211Target.tasks.named('build')
+    if (neoforge1211Target != null) {
+        dependsOn neoforge1211Target.tasks.named('build')
+    }
+    doFirst {
+        requireIncludedTarget('NeoForge target', neoforge1211Target)
+    }
 }
 
 tasks.register('cleanFabric') {
     group = 'linearreader'
-    description = 'Cleans all live Fabric targets.'
-    dependsOn fabric1201Target.tasks.named('clean')
-    dependsOn fabric1202To1214Target.tasks.named('clean')
-    dependsOn fabric1215To12110Target.tasks.named('clean')
-    dependsOn fabric12111Target.tasks.named('clean')
+    description = 'Cleans all live Fabric targets for this Gradle runtime.'
+    dependsOnTask(delegate, fabricTargets, 'clean')
 }
 
 tasks.register('cleanForgeNeoForge') {
@@ -95,22 +132,29 @@ tasks.register('cleanForgeNeoForge') {
 tasks.register('cleanForge') {
     group = 'linearreader'
     description = 'Cleans the Forge target.'
-    dependsOn forge1201Target.tasks.named('clean')
+    if (forge1201Target != null) {
+        dependsOn forge1201Target.tasks.named('clean')
+    }
+    doFirst {
+        requireIncludedTarget('Forge target', forge1201Target)
+    }
 }
 
 tasks.register('cleanNeoForge') {
     group = 'linearreader'
     description = 'Cleans the NeoForge target.'
-    dependsOn neoforge1211Target.tasks.named('clean')
+    if (neoforge1211Target != null) {
+        dependsOn neoforge1211Target.tasks.named('clean')
+    }
+    doFirst {
+        requireIncludedTarget('NeoForge target', neoforge1211Target)
+    }
 }
 
 tasks.register('testFabric') {
     group = 'linearreader'
-    description = 'Runs all live Fabric target tests.'
-    dependsOn fabric1201Target.tasks.named('test')
-    dependsOn fabric1202To1214Target.tasks.named('test')
-    dependsOn fabric1215To12110Target.tasks.named('test')
-    dependsOn fabric12111Target.tasks.named('test')
+    description = 'Runs all live Fabric target tests for this Gradle runtime.'
+    dependsOnTask(delegate, fabricTargets, 'test')
 }
 
 tasks.register('testForgeNeoForge') {
@@ -123,63 +167,64 @@ tasks.register('testForgeNeoForge') {
 tasks.register('testForge') {
     group = 'linearreader'
     description = 'Runs the Forge target tests.'
-    dependsOn forge1201Target.tasks.named('test')
+    if (forge1201Target != null) {
+        dependsOn forge1201Target.tasks.named('test')
+    }
+    doFirst {
+        requireIncludedTarget('Forge target', forge1201Target)
+    }
 }
 
 tasks.register('testNeoForge') {
     group = 'linearreader'
     description = 'Runs the NeoForge target tests.'
-    dependsOn neoforge1211Target.tasks.named('test')
+    if (neoforge1211Target != null) {
+        dependsOn neoforge1211Target.tasks.named('test')
+    }
+    doFirst {
+        requireIncludedTarget('NeoForge target', neoforge1211Target)
+    }
 }
 
 tasks.register('generateTestCorpus') {
     group = 'linearreader'
     description = 'Regenerates the shared .linear test corpus.'
-    dependsOn fabric1201Target.tasks.named('generateTestCorpus')
+    if (fabric1201Target != null) {
+        dependsOn fabric1201Target.tasks.named('generateTestCorpus')
+    } else {
+        doFirst {
+            throw new GradleException('generateTestCorpus requires the Fabric 1.20 target (Gradle 8 runtime).')
+        }
+    }
 }
 
 tasks.register('buildAll') {
     group = 'linearreader'
-    description = 'Builds all live targets.'
-    dependsOn fabric1201Target.tasks.named('build')
-    dependsOn fabric1202To1214Target.tasks.named('build')
-    dependsOn fabric1215To12110Target.tasks.named('build')
-    dependsOn fabric12111Target.tasks.named('build')
-    dependsOn forge1201Target.tasks.named('build')
-    dependsOn neoforge1211Target.tasks.named('build')
+    description = 'Builds all live targets for this Gradle runtime.'
+    dependsOnTask(delegate, liveTargets, 'build')
 }
 
 tasks.register('testAll') {
     group = 'linearreader'
-    description = 'Runs the shared storage test suite in all live target environments.'
-    dependsOn fabric1201Target.tasks.named('test')
-    dependsOn fabric1202To1214Target.tasks.named('test')
-    dependsOn fabric1215To12110Target.tasks.named('test')
-    dependsOn fabric12111Target.tasks.named('test')
-    dependsOn forge1201Target.tasks.named('test')
-    dependsOn neoforge1211Target.tasks.named('test')
+    description = 'Runs the shared storage test suite in all live target environments for this Gradle runtime.'
+    dependsOnTask(delegate, liveTargets, 'test')
 }
 
 tasks.register('cleanAll') {
     group = 'linearreader'
-    description = 'Cleans all live targets.'
-    dependsOn fabric1201Target.tasks.named('clean')
-    dependsOn fabric1202To1214Target.tasks.named('clean')
-    dependsOn fabric1215To12110Target.tasks.named('clean')
-    dependsOn fabric12111Target.tasks.named('clean')
-    dependsOn forge1201Target.tasks.named('clean')
-    dependsOn neoforge1211Target.tasks.named('clean')
+    description = 'Cleans all live targets for this Gradle runtime.'
+    dependsOnTask(delegate, liveTargets, 'clean')
 }
 
 tasks.register('compileJava') {
     group = 'build'
-    description = 'Compiles all target Java sources.'
+    description = 'Compiles all live target Java sources for this Gradle runtime.'
     dependsOn tasks.named('compileAll')
 }
 
 tasks.register('test') {
     group = 'verification'
-    description = 'Runs all target tests.'
+    description = 'Runs all live target tests for this Gradle runtime.'
     dependsOn tasks.named('testAll')
 }
 
@@ -197,43 +242,64 @@ tasks.named('check').configure {
 
 tasks.register('collectJars', Copy) {
     group = 'linearreader'
-    description = 'Collects built mod jars from all loader targets into root/build/collected-jars.'
+    description = 'Collects built mod jars from all live loader targets into root/build/collected-jars.'
     dependsOn tasks.named('buildAll')
     into layout.buildDirectory.dir('collected-jars')
 
-    from(fabric1201Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'fabric_1_20_to_1_20_1'
+    fabricTargets.each { target ->
+        from(target.layout.buildDirectory.dir('libs')) {
+            include '*.jar'
+            exclude '*-sources.jar', '*-javadoc.jar'
+            into target.name
+        }
     }
 
-    from(fabric1202To1214Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'fabric_1_20_2_to_1_21_4'
+    forgeNeoForgeTargets.each { target ->
+        from(target.layout.buildDirectory.dir('libs')) {
+            include '*.jar'
+            exclude '*-sources.jar', '*-javadoc.jar'
+            into target.name
+        }
+    }
+}
+
+def gradle9DelegateAvailable = GradleVersion.current() < GradleVersion.version('9.0')
+        && rootProject.file('gradlew9').exists()
+
+if (gradle9DelegateAvailable) {
+    def gradleUserHome = System.getenv('GRADLE_USER_HOME')
+            ?: rootProject.file('.gradle-user-home').absolutePath
+
+    def registerGradle9Delegate = { String taskName ->
+        def delegateTaskName = "gradle9${taskName.capitalize()}"
+        tasks.register(delegateTaskName, Exec) {
+            group = 'linearreader'
+            description = "Runs '${taskName}' for Gradle 9 targets (Fabric 26.1.x)."
+            workingDir rootProject.projectDir
+            environment 'GRADLE_USER_HOME', gradleUserHome
+            commandLine rootProject.file('gradlew9').absolutePath, taskName
+        }
+        tasks.named(taskName).configure {
+            dependsOn delegateTaskName
+        }
     }
 
-    from(fabric1215To12110Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'fabric_1_21_5_to_1_21_10'
+    registerGradle9Delegate('cleanAll')
+    registerGradle9Delegate('buildAll')
+    registerGradle9Delegate('testAll')
+
+    tasks.register('gradle9CollectJars', Copy) {
+        group = 'linearreader'
+        description = 'Merges Fabric 26.1.x jars into collected-jars without replacing other targets.'
+        dependsOn tasks.named('gradle9BuildAll')
+        from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_1_to_26_1_2/build/libs')) {
+            include '*.jar'
+            exclude '*-sources.jar', '*-javadoc.jar'
+        }
+        into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_1_2')
     }
 
-    from(fabric12111Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'fabric_1_21_11'
-    }
-
-    from(forge1201Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'forge_1_20_to_1_20_1'
-    }
-
-    from(neoforge1211Target.layout.buildDirectory.dir('libs')) {
-        include '*.jar'
-        exclude '*-sources.jar', '*-javadoc.jar'
-        into 'neoforge_1_21_1'
+    tasks.named('collectJars').configure {
+        finalizedBy tasks.named('gradle9CollectJars')
     }
 }

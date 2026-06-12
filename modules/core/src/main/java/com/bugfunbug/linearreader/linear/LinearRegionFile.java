@@ -4,6 +4,7 @@ import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.LinearStats;
 import com.bugfunbug.linearreader.StoragePolicyManager;
 import com.bugfunbug.linearreader.config.LinearConfig;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.world.level.ChunkPos;
 
 import org.jetbrains.annotations.Nullable;
@@ -194,7 +195,7 @@ public class LinearRegionFile {
     // -------------------------------------------------------------------------
 
     private static int indexOf(ChunkPos pos) {
-        return (pos.x & 31) + (pos.z & 31) * REGION_DIM;
+        return pos.getRegionLocalX() + pos.getRegionLocalZ() * REGION_DIM;
     }
 
     private static java.util.concurrent.ExecutorService createBackupExecutor() {

@@ -6,6 +6,8 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.network.protocol.game.ServerboundChatCommandPacket;
 
 public final class VoxyCompatClientCommands {
 
@@ -34,7 +36,11 @@ public final class VoxyCompatClientCommands {
             source.sendError(Component.literal("[LinearReader] No server connection is available."));
             return 0;
         }
-        connection.sendCommand(command);
+        // Send the packet directly to bypass Fabric's client command API interception.
+        // Using connection.sendCommand(command) causes infinite recursion because Fabric
+        // hooks sendCommand and re-executes /linearreader as a client command (since it
+        // is registered client-side for voxy-compat), producing a StackOverflowError.
+        connection.getConnection().send(new ServerboundChatCommandPacket(command));
         return 1;
     }
 

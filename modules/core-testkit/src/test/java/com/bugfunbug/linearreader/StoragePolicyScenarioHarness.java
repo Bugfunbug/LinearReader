@@ -2,6 +2,7 @@ package com.bugfunbug.linearreader;
 
 import com.bugfunbug.linearreader.linear.LinearCoreTestHooks;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import com.bugfunbug.linearreader.linear.LinearTestData;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
@@ -293,7 +294,10 @@ final class StoragePolicyScenarioHarness implements AutoCloseable {
     }
 
     private static CompoundTag payloadChunk(String kind, ChunkPos pos, int serial, int payloadBytes) {
-        CompoundTag tag = LinearTestData.simpleChunk(kind + "-" + serial, pos.x, pos.z);
+        CompoundTag tag = LinearTestData.simpleChunk(
+                kind + "-" + serial,
+                ChunkPosCompat.x(pos),
+                ChunkPosCompat.z(pos));
         if (payloadBytes > 0) {
             tag.putString("payload", "x".repeat(payloadBytes));
         }

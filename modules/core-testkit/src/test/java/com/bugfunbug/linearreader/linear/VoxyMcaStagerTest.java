@@ -2,6 +2,7 @@ package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.LinearTestSupport;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
@@ -46,7 +47,10 @@ class VoxyMcaStagerTest {
         Path worldRoot = tempDir.resolve("world");
         Path regionFolder = worldRoot.resolve("region");
         ChunkPos chunk = new ChunkPos(2, 3);
-        CompoundTag expected = LinearTestData.simpleChunk("voxy-stage", chunk.x, chunk.z);
+        CompoundTag expected = LinearTestData.simpleChunk(
+                "voxy-stage",
+                ChunkPosCompat.x(chunk),
+                ChunkPosCompat.z(chunk));
         LinearTestData.writeRegion(
                 regionFolder.resolve("r.0.0.linear"),
                 Map.of(chunk, expected)

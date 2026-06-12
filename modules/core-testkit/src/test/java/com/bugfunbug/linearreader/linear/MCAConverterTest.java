@@ -2,6 +2,7 @@ package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.LinearTestSupport;
+import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
@@ -91,7 +92,7 @@ class MCAConverterTest {
             throws Exception {
         Files.createDirectories(regionFolder);
         Path mcaPath = regionFolder.resolve("r." + regionX + "." + regionZ + ".mca");
-        CompoundTag tag = LinearTestData.simpleChunk(kind, chunk.x, chunk.z);
+        CompoundTag tag = LinearTestData.simpleChunk(kind, ChunkPosCompat.x(chunk), ChunkPosCompat.z(chunk));
         try (RegionFile region = LinearRuntime.openVanillaRegionFile(mcaPath, regionFolder, false);
              DataOutputStream output = region.getChunkDataOutputStream(chunk)) {
             NbtIo.write(tag, output);
