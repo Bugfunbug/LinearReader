@@ -48,6 +48,9 @@ if (gradle9OrNewer) {
     include(":targets:forge_1_20_to_1_20_1")
     project(":targets:forge_1_20_to_1_20_1").projectDir = file("modules/targets/forge_1_20_to_1_20_1")
 
+    include(":targets:forge_1_20_2_to_1_21_4")
+    project(":targets:forge_1_20_2_to_1_21_4").projectDir = file("modules/targets/forge_1_20_2_to_1_21_4")
+
     include(":targets:neoforge_1_21_1")
     project(":targets:neoforge_1_21_1").projectDir = file("modules/targets/neoforge_1_21_1")
 }
