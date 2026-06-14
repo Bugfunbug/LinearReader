@@ -60,6 +60,7 @@ public abstract class RegionFileStorageMixin {
         ensureLinearCacheInitialized();
         if (folder == null) return null;
 
+        // 26.1+: ChunkPos.asLong is gone; use ChunkPos.pack instead
         long key = ChunkPos.pack(pos.getRegionX(), pos.getRegionZ());
 
         LinearRegionFile cached = linearCache.getAndMoveToFirst(key);
