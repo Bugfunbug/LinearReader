@@ -132,6 +132,19 @@ repositories {
     mavenCentral()
 }
 
+tasks.withType(JavaCompile).configureEach {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
+    }
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
+    }
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
 tasks.named('processTestResources', ProcessResources).configure {
     from(configurations.zstdRuntime) {
         into 'META-INF/linearreader-libs'
