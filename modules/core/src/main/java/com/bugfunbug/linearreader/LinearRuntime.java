@@ -609,7 +609,7 @@ public final class LinearRuntime {
         }
     }
 
-    private void migrateLegacyBackups() {
+    void migrateLegacyBackups() {
         Path root = worldRoot;
         if (root == null) return;
 

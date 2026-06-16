@@ -14,7 +14,7 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
 /**
- * 1.21.5+ variant of LinearBackedRegionFile. The only material change from the
+ * 1.20.6+ variant of LinearBackedRegionFile. The only material change from the
  * older shared implementation is the RegionFile constructor signature required
  * by the compiler; runtime instances are still allocated with Unsafe.
  */

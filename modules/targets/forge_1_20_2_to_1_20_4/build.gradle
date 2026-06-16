@@ -43,7 +43,7 @@ base {
     archivesName = modId
 }
 
-java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 sourceSets {
     main {
@@ -111,38 +111,7 @@ sourceSets.main.resources {
 }
 
 repositories {
-    // Intercept requests for the broken LWJGL artifact and route them
-    // to local dummy repository, just like for NeoForge.
-    exclusiveContent {
-        forRepository {
-            maven {
-                name = 'LocalLwjglPatch'
-                url = rootProject.file('build-logic/local-maven')
-                metadataSources {
-                    mavenPom()
-                    artifact()
-                }
-            }
-        }
-        filter {
-            includeModule('org.lwjgl', 'lwjgl-freetype')
-        }
-    }
-
     mavenCentral()
-}
-
-tasks.withType(JavaCompile).configureEach {
-    exclude { details ->
-        details.file == rootProject.file(
-                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
-    }
-    exclude { details ->
-        details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
-    }
-    options.release = 21
-    options.encoding = 'UTF-8'
 }
 
 tasks.named('processTestResources', ProcessResources).configure {
@@ -188,7 +157,7 @@ jar {
                 'MixinConfigs': "${modId}.mixins.json"
         ])
     }
-    finalizedBy tasks.matching { it.name == 'reobfJar' }
+    finalizedBy 'reobfJar'
 }
 
 tasks.named('processResources', ProcessResources).configure {
