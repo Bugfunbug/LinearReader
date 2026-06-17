@@ -30,8 +30,8 @@ include(":targets")
 project(":targets").projectDir = file("modules/targets")
 
 if (gradle9OrNewer) {
-    include(":targets:fabric_26_1_to_26_1_2")
-    project(":targets:fabric_26_1_to_26_1_2").projectDir = file("modules/targets/fabric_26_1_to_26_1_2")
+    include(":targets:fabric_26_1_to_26_2")
+    project(":targets:fabric_26_1_to_26_2").projectDir = file("modules/targets/fabric_26_1_to_26_2")
 
     include(":targets:forge_26_1_to_26_1_2")
     project(":targets:forge_26_1_to_26_1_2").projectDir = file("modules/targets/forge_26_1_to_26_1_2")

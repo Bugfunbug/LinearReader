@@ -19,7 +19,7 @@ def fabric1201Target = targetOrNull(':targets:fabric_1_20_to_1_20_1')
 def fabric1202To1214Target = targetOrNull(':targets:fabric_1_20_2_to_1_21_4')
 def fabric1215To12110Target = targetOrNull(':targets:fabric_1_21_5_to_1_21_10')
 def fabric12111Target = targetOrNull(':targets:fabric_1_21_11')
-def fabric261To2612Target = targetOrNull(':targets:fabric_26_1_to_26_1_2')
+def fabric261To262Target = targetOrNull(':targets:fabric_26_1_to_26_2')
 def forge1201Target = targetOrNull(':targets:forge_1_20_to_1_20_1')
 def forge1202To1204Target = targetOrNull(':targets:forge_1_20_2_to_1_20_4')
 def forge1206To1214Target = targetOrNull(':targets:forge_1_20_6_to_1_21_4')
@@ -34,7 +34,7 @@ def fabricTargets = [
         fabric1202To1214Target,
         fabric1215To12110Target,
         fabric12111Target,
-        fabric261To2612Target
+        fabric261To262Target
 ].findAll { it != null }
 
 def forgeNeoForgeTargets = [
@@ -310,11 +310,11 @@ if (gradle9DelegateAvailable) {
 
         doLast {
             copy {
-                from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_1_to_26_1_2/build/libs')) {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_1_to_26_2/build/libs')) {
                     include '*.jar'
                     exclude '*-sources.jar', '*-javadoc.jar'
                 }
-                into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_1_2')
+                into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_2')
             }
             copy {
                 from(rootProject.layout.projectDirectory.dir('modules/targets/forge_26_1_to_26_1_2/build/libs')) {

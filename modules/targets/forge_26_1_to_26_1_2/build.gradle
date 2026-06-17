@@ -60,7 +60,7 @@ sourceSets {
         java.srcDir new File(projectDir, 'src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/core/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/minecraft-api/src/main/java')
-        java.srcDir new File(workspaceRoot, 'modules/minecraft-families/mc_26_1_to_26_1_2/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/minecraft-families/mc_26_1_to_26_2/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/loader-families/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/loader-families/forge_1_21_11_to_26_1_2/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/targets/src/main/java')

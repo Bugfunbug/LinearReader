@@ -1,6 +1,6 @@
 package com.bugfunbug.linearreader;
 
-import com.bugfunbug.linearreader.mc261to2612.Minecraft261To2612Family;
+import com.bugfunbug.linearreader.mc261to262.Minecraft261To262Family;
 import com.bugfunbug.linearreader.targets.Forge261To2612Target;
 import net.minecraftforge.fml.common.Mod;
 
@@ -8,7 +8,7 @@ import net.minecraftforge.fml.common.Mod;
 public class LinearReader {
 
     public static void installForTests() {
-        LinearRuntime.install(Minecraft261To2612Family.INSTANCE);
+        LinearRuntime.install(Minecraft261To262Family.INSTANCE);
     }
 
     public LinearReader() {
