@@ -1,0 +1,208 @@
+import java.util.Properties
+
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.+'
+}
+
+def targetProperties = new Properties()
+file('gradle.properties').withInputStream(targetProperties.&load)
+
+def targetProperty = { String name ->
+    def value = targetProperties.getProperty(name)
+    if (value == null) {
+        throw new GradleException("Missing target property '${name}' in ${projectDir}/gradle.properties")
+    }
+    value
+}
+
+def minecraftVersion = targetProperty('minecraft_version')
+def minecraftVersionRange = targetProperty('minecraft_version_range')
+def minecraftVersionRangeLabel = targetProperty('minecraft_version_range_label')
+def forgeVersion = targetProperty('forge_version')
+def forgeVersionRange = targetProperty('forge_version_range')
+def loaderVersionRange = targetProperty('loader_version_range')
+def mappingChannel = targetProperty('mapping_channel')
+def mappingVersion = targetProperty('mapping_version')
+def modId = targetProperty('mod_id')
+def modName = targetProperty('mod_name')
+def modLicense = targetProperty('mod_license')
+def modAuthors = targetProperty('mod_authors')
+def modDescription = targetProperty('mod_description')
+def zstdVersion = '1.5.5-11'
+
+version = targetProperty('mod_version')
+group = targetProperty('mod_group_id')
+
+def artifactStem = "${modId}-${project.version}-forge-${minecraftVersionRangeLabel}"
+
+base {
+    archivesName = modId
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+sourceSets {
+    main {
+        java.srcDir rootProject.file('modules/core/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/forge_1_21_6_to_26_1_2/src/main/java')
+        java.srcDir rootProject.file('modules/targets/src/main/java')
+    }
+    test {
+        java.srcDir rootProject.file('modules/loader-families/forge_1_21_6_to_26_1_2/src/test/java')
+    }
+}
+
+configurations {
+    zstdRuntime
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraftVersion}-${forgeVersion}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
+
+    // Keep zstd-jni out of the mod module itself to avoid split-package crashes
+    // with other mods that also bundle com.github.luben.zstd.
+    zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
+    }
+}
+
+minecraft {
+    mappings channel: mappingChannel, version: mappingVersion
+    copyIdeResources = true
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            arg '-mixin.config=linearreader.mixins.json'
+            mods {
+                "${modId}" {
+                    source sourceSets.main
+                }
+            }
+        }
+        client {
+            property 'mixin.debug.export', 'true'
+            property 'mixin.debug.verbose', 'true'
+        }
+        server {
+            args '--nogui'
+        }
+    }
+}
+
+mixin {
+    add sourceSets.main, "${modId}.refmap.json"
+    config "${modId}.mixins.json"
+}
+
+sourceSets.main.resources {
+    srcDir 'src/generated/resources'
+}
+
+repositories {
+    // Intercept requests for the broken LWJGL artifact and route them
+    // to local dummy repository, just like for NeoForge.
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'LocalLwjglPatch'
+                url = rootProject.file('build-logic/local-maven')
+                metadataSources {
+                    mavenPom()
+                    artifact()
+                }
+            }
+        }
+        filter {
+            includeModule('org.lwjgl', 'lwjgl-freetype')
+        }
+    }
+
+    mavenCentral()
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+tasks.named('jar', Jar).configure {
+    archiveFileName.set("${artifactStem}.jar")
+}
+
+jar {
+    // Ship zstd-jni as a nested resource jar and load it through an isolated
+    // classloader at runtime. This keeps com.github.luben.zstd out of the
+    // Minecraft module layer while preserving the original JNI class names.
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from(rootProject.file('LICENSE')) {
+        rename { 'LICENSE.txt' }
+        into '/'
+    }
+    from(rootProject.file('README.md')) { into '/' }
+
+    manifest {
+        attributes([
+                'Specification-Title': modId,
+                'Specification-Vendor': modAuthors,
+                'Specification-Version': '1',
+                'Implementation-Title': project.name,
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor': modAuthors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'MixinConfigs': "${modId}.mixins.json"
+        ])
+    }
+    finalizedBy tasks.matching { it.name == 'reobfJar' }
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def replaceProperties = [
+            minecraft_version: minecraftVersion,
+            minecraft_version_range: minecraftVersionRange,
+            forge_version: forgeVersion,
+            forge_version_range: forgeVersionRange,
+            loader_version_range: loaderVersionRange,
+            mod_id: modId,
+            mod_name: modName,
+            mod_license: modLicense,
+            mod_version: project.version,
+            mod_authors: modAuthors,
+            mod_description: modDescription,
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replaceProperties + [project: project]
+    }
+}
