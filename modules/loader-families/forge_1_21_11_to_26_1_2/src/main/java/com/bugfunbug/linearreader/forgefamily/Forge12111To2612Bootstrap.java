@@ -15,12 +15,12 @@ import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
-public final class Forge12111Bootstrap implements LoaderBootstrap {
+public final class Forge12111To2612Bootstrap implements LoaderBootstrap {
 
     private final MinecraftFamily minecraftFamily;
     private final LinearRuntime runtime;
 
-    public Forge12111Bootstrap(MinecraftFamily minecraftFamily) {
+    public Forge12111To2612Bootstrap(MinecraftFamily minecraftFamily) {
         this.minecraftFamily = minecraftFamily;
         this.runtime = installRuntime();
 

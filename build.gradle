@@ -26,6 +26,7 @@ def forge1206To1214Target = targetOrNull(':targets:forge_1_20_6_to_1_21_4')
 def forge1215Target = targetOrNull(':targets:forge_1_21_5')
 def forge1216To12110Target = targetOrNull(':targets:forge_1_21_6_to_1_21_10')
 def forge12111Target = targetOrNull(':targets:forge_1_21_11')
+def forge261To2612Target = targetOrNull(':targets:forge_26_1_to_26_1_2')
 def neoforge1211Target = targetOrNull(':targets:neoforge_1_21_1')
 
 def fabricTargets = [
@@ -43,6 +44,7 @@ def forgeNeoForgeTargets = [
         forge1215Target,
         forge1216To12110Target,
         forge12111Target,
+        forge261To2612Target,
         neoforge1211Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
@@ -301,15 +303,27 @@ if (gradle9DelegateAvailable) {
     registerGradle9Delegate('buildAll')
     registerGradle9Delegate('testAll')
 
-    tasks.register('gradle9CollectJars', Copy) {
+    tasks.register('gradle9CollectJars') {
         group = 'linearreader'
-        description = 'Merges Fabric 26.1.x jars into collected-jars without replacing other targets.'
+        description = 'Merges Fabric and Forge 26.1.x jars into collected-jars.'
         dependsOn tasks.named('gradle9BuildAll')
-        from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_1_to_26_1_2/build/libs')) {
-            include '*.jar'
-            exclude '*-sources.jar', '*-javadoc.jar'
+
+        doLast {
+            copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_1_to_26_1_2/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_1_2')
+            }
+            copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/forge_26_1_to_26_1_2/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/forge_26_1_to_26_1_2')
+            }
         }
-        into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_1_2')
     }
 
     tasks.named('collectJars').configure {

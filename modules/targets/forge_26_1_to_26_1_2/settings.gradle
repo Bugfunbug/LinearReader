@@ -1,0 +1,12 @@
+pluginManagement {
+    repositories {
+        maven {
+            name = "MinecraftForge"
+            url = "https://maven.minecraftforge.net/"
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = "LinearReader-forge-26.1"

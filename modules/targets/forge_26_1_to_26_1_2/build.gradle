@@ -1,11 +1,12 @@
 import java.util.Properties
 
 plugins {
+    id 'java'
+    id 'java-library'
     id 'eclipse'
     id 'idea'
     id 'maven-publish'
-    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
-    id 'org.spongepowered.mixin' version '0.7.+'
+    id 'net.minecraftforge.gradle' version '7.0.+'
 }
 
 def targetProperties = new Properties()
@@ -45,18 +46,24 @@ base {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
+def workspaceRoot = rootProject.file('modules/core').exists()
+        ? rootProject.projectDir
+        : projectDir.parentFile.parentFile.parentFile
+
 sourceSets {
     main {
-        java.srcDir rootProject.file('modules/core/src/main/java')
-        java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
-        java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_11/src/main/java')
-        java.srcDir rootProject.file('modules/loader-families/src/main/java')
-        java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_1_2/src/main/java')
-        java.srcDir rootProject.file('modules/targets/src/main/java')
+        java.setSrcDirs([])
+        java.srcDir new File(projectDir, 'src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/core/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/minecraft-api/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/minecraft-families/mc_26_1_to_26_1_2/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/loader-families/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/loader-families/forge_1_21_11_to_26_1_2/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/targets/src/main/java')
     }
     test {
         java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_1_2/src/test/java')
@@ -67,15 +74,50 @@ configurations {
     zstdRuntime
 }
 
+minecraft {
+    mappings channel: mappingChannel, version: mappingVersion
+    runs {
+        configureEach {
+            workingDir = project.file('run')
+
+            systemProperties.set([
+                    'forge.logging.markers': 'REGISTRIES',
+                    'forge.logging.console.level': 'debug'
+            ])
+
+            args.add('-mixin.config=linearreader.mixins.json')
+
+            mods {
+                "${modId}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+            systemProperties.putAll([
+                    'mixin.debug.export': 'true',
+                    'mixin.debug.verbose': 'true'
+            ])
+        }
+
+        server {
+            args.add('--nogui')
+        }
+    }
+}
+
 dependencies {
-    minecraft "net.minecraftforge:forge:${minecraftVersion}-${forgeVersion}"
+    implementation minecraft.dependency("net.minecraftforge:forge:${minecraftVersion}-${forgeVersion}")
+
+    compileOnly 'org.spongepowered:mixin:0.8.7'
+
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
     testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
 
-    // Keep zstd-jni out of the mod module itself to avoid split-package crashes
-    // with other mods that also bundle com.github.luben.zstd.
     zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
-    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -83,36 +125,9 @@ tasks.withType(JavaCompile).configureEach {
         details.file == rootProject.file(
                 'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
     }
-}
-
-minecraft {
-    mappings channel: mappingChannel, version: mappingVersion
-    copyIdeResources = true
-    runs {
-        configureEach {
-            workingDirectory project.file('run')
-            property 'forge.logging.markers', 'REGISTRIES'
-            property 'forge.logging.console.level', 'debug'
-            arg '-mixin.config=linearreader.mixins.json'
-            mods {
-                "${modId}" {
-                    source sourceSets.main
-                }
-            }
-        }
-        client {
-            property 'mixin.debug.export', 'true'
-            property 'mixin.debug.verbose', 'true'
-        }
-        server {
-            args '--nogui'
-        }
-    }
-}
-
-mixin {
-    add sourceSets.main, "${modId}.refmap.json"
-    config "${modId}.mixins.json"
+    options.compilerArgs.addAll([
+            '-encoding', 'UTF-8'
+    ])
 }
 
 sourceSets.main.resources {
@@ -120,22 +135,29 @@ sourceSets.main.resources {
 }
 
 repositories {
-    // Intercept requests for the broken LWJGL artifact and route them
-    // to local dummy repository, just like for NeoForge.
+    minecraft.mavenizer repositories
+
     exclusiveContent {
         forRepository {
-            maven {
-                name = 'LocalLwjglPatch'
-                url = rootProject.file('build-logic/local-maven')
-                metadataSources {
-                    mavenPom()
-                    artifact()
-                }
-            }
+            // Tell Gradle to pull the legitimate file from Maven Central instead of your local disk
+            mavenCentral()
         }
         filter {
             includeModule('org.lwjgl', 'lwjgl-freetype')
         }
+    }
+
+    maven {
+        name = 'MinecraftForge'
+        url = 'https://maven.minecraftforge.net/'
+    }
+    maven {
+        name = 'SpongePowered'
+        url = 'https://repo.spongepowered.org/repository/maven-public/'
+    }
+    maven {
+        name = 'ParchmentMC'
+        url = 'https://maven.parchmentmc.org'
     }
 
     mavenCentral()
