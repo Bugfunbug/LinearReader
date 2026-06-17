@@ -25,6 +25,7 @@ def forge1202To1204Target = targetOrNull(':targets:forge_1_20_2_to_1_20_4')
 def forge1206To1214Target = targetOrNull(':targets:forge_1_20_6_to_1_21_4')
 def forge1215Target = targetOrNull(':targets:forge_1_21_5')
 def forge1216To12110Target = targetOrNull(':targets:forge_1_21_6_to_1_21_10')
+def forge12111Target = targetOrNull(':targets:forge_1_21_11')
 def neoforge1211Target = targetOrNull(':targets:neoforge_1_21_1')
 
 def fabricTargets = [
@@ -41,6 +42,7 @@ def forgeNeoForgeTargets = [
         forge1206To1214Target,
         forge1215Target,
         forge1216To12110Target,
+        forge12111Target,
         neoforge1211Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets

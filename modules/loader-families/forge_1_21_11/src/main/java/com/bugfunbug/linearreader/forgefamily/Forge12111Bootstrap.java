@@ -15,12 +15,12 @@ import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
-public final class Forge1216To2612Bootstrap implements LoaderBootstrap {
+public final class Forge12111Bootstrap implements LoaderBootstrap {
 
     private final MinecraftFamily minecraftFamily;
     private final LinearRuntime runtime;
 
-    public Forge1216To2612Bootstrap(MinecraftFamily minecraftFamily) {
+    public Forge12111Bootstrap(MinecraftFamily minecraftFamily) {
         this.minecraftFamily = minecraftFamily;
         this.runtime = installRuntime();
 
@@ -41,10 +41,10 @@ public final class Forge1216To2612Bootstrap implements LoaderBootstrap {
         LevelEvent.Save.BUS.addListener(this::onLevelSave);
         RegisterCommandsEvent.BUS.addListener(this::onCommands);
 
-        // 3. Target ServerTickEvent explicitly using the EventBus 7 engine factory class.
-        // This completely avoids the deprecated base fields and handles type safety natively.
-        net.minecraftforge.eventbus.api.bus.EventBus.create(TickEvent.ServerTickEvent.class)
-                .addListener(this::onServerTick);
+        // 3. Target ServerTickEvent.Post directly.
+        // It now has its own standalone native BUS field, completely removing the need for
+        // manual factory creation or legacy phase enum parsing!
+        TickEvent.ServerTickEvent.Post.BUS.addListener(this::onServerTick);
     }
 
     private LinearRuntime installRuntime() {
@@ -80,12 +80,12 @@ public final class Forge1216To2612Bootstrap implements LoaderBootstrap {
         runtime.onLevelSave();
     }
 
-    // ---------------- TICK HANDLER ----------------
+    // ---------------- TICK HANDLER (CLEAN 1.21.11 STRUCTURE) ----------------
 
-    private void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase == TickEvent.Phase.END) {
-            runtime.onServerTick();
-        }
+    private void onServerTick(TickEvent.ServerTickEvent.Post event) {
+        // The event system only fires this method at the end of a tick now.
+        // No phase checks required!
+        runtime.onServerTick();
     }
 
     // ---------------- COMMAND LISTENERS ----------------
