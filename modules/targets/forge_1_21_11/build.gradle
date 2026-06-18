@@ -55,11 +55,11 @@ sourceSets {
         java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
         java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_11/src/main/java')
         java.srcDir rootProject.file('modules/loader-families/src/main/java')
-        java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_1_2/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_2/src/main/java')
         java.srcDir rootProject.file('modules/targets/src/main/java')
     }
     test {
-        java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_1_2/src/test/java')
+        java.srcDir rootProject.file('modules/loader-families/forge_1_21_11_to_26_2/src/test/java')
     }
 }
 

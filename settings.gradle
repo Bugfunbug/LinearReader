@@ -33,8 +33,8 @@ if (gradle9OrNewer) {
     include(":targets:fabric_26_1_to_26_2")
     project(":targets:fabric_26_1_to_26_2").projectDir = file("modules/targets/fabric_26_1_to_26_2")
 
-    include(":targets:forge_26_1_to_26_1_2")
-    project(":targets:forge_26_1_to_26_1_2").projectDir = file("modules/targets/forge_26_1_to_26_1_2")
+    include(":targets:forge_26_1_to_26_2")
+    project(":targets:forge_26_1_to_26_2").projectDir = file("modules/targets/forge_26_1_to_26_2")
 } else {
     include(":targets:fabric_1_20_to_1_20_1")
     project(":targets:fabric_1_20_to_1_20_1").projectDir = file("modules/targets/fabric_1_20_to_1_20_1")
@@ -66,8 +66,8 @@ if (gradle9OrNewer) {
     include(":targets:forge_1_21_11")
     project(":targets:forge_1_21_11").projectDir = file("modules/targets/forge_1_21_11")
 
-    include(":targets:neoforge_1_20_2_to_1_20_4")
-    project(":targets:neoforge_1_20_2_to_1_20_4").projectDir = file("modules/targets/neoforge_1_20_2_to_1_20_4")
+    // include(":targets:neoforge_1_20_2_to_1_20_4")
+    // project(":targets:neoforge_1_20_2_to_1_20_4").projectDir = file("modules/targets/neoforge_1_20_2_to_1_20_4")
 
     include(":targets:neoforge_1_21_1_to_1_21_4")
     project(":targets:neoforge_1_21_1_to_1_21_4").projectDir = file("modules/targets/neoforge_1_21_1_to_1_21_4")
