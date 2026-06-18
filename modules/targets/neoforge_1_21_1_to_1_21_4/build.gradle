@@ -1,0 +1,675 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.xml.XmlParser
+import groovy.xml.XmlUtil
+import java.util.Properties
+import java.util.zip.ZipFile
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.gradle.userdev' version '7.1.26'
+}
+
+def targetProperties = new Properties()
+file('gradle.properties').withInputStream(targetProperties.&load)
+
+def targetProperty = { String name ->
+    def value = targetProperties.getProperty(name)
+    if (value == null) {
+        throw new GradleException("Missing target property '${name}' in ${projectDir}/gradle.properties")
+    }
+    value
+}
+
+def minecraftVersion = targetProperty('minecraft_version')
+def minecraftVersionRange = targetProperty('minecraft_version_range')
+def minecraftVersionRangeLabel = targetProperty('minecraft_version_range_label')
+def neoforgeVersion = targetProperty('neoforge_version')
+def neoforgeVersionRange = targetProperty('neoforge_version_range')
+def loaderVersionRange = targetProperty('loader_version_range')
+def modConfigName = targetProperty('mod_config_name')
+def zstdVersion = targetProperty('zstd_version')
+def modId = targetProperty('mod_id')
+def modName = targetProperty('mod_name')
+def modLicense = targetProperty('mod_license')
+def modAuthors = targetProperty('mod_authors')
+def modDescription = targetProperty('mod_description')
+def brokenLwjglClassifier = 'org.lwjgl:lwjgl-freetype:3.3.3:natives-macos-patch'
+
+version = targetProperty('mod_version')
+group = targetProperty('mod_group_id')
+
+def artifactStem = "${modId}-${project.version}-neoforge-${minecraftVersionRangeLabel}"
+
+base {
+    archivesName = modId + '-neoforge'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+sourceSets {
+    main {
+        java.srcDir rootProject.file('modules/core/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/neoforge_1_21_1_to_1_21_10/src/main/java')
+        java.srcDir rootProject.file('modules/targets/src/main/java')
+    }
+    test {
+        java.srcDir rootProject.file('modules/core-testkit/src/test/java')
+        resources.srcDir rootProject.file('modules/core-testkit/src/test/resources')
+    }
+}
+
+configurations {
+    zstdRuntime
+}
+
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'LocalLwjglPatch'
+                url = rootProject.file('build-logic/local-maven')
+                metadataSources {
+                    mavenPom()
+                    artifact()
+                }
+            }
+        }
+        filter {
+            includeModule('org.lwjgl', 'lwjgl-freetype')
+        }
+    }
+    maven {
+        name = 'NeoForged'
+        url = 'https://maven.neoforged.net/releases'
+    }
+    maven {
+        name = 'LWJGL'
+        url = 'https://build.lwjgl.org/release'
+        content {
+            includeGroup 'org.lwjgl'
+        }
+        metadataSources {
+            mavenPom()
+            artifact()
+        }
+    }
+    mavenCentral()
+}
+
+dependencies {
+    implementation "net.neoforged:neoforge:${neoforgeVersion}"
+    compileOnly "net.neoforged:neoforge:${neoforgeVersion}:universal"
+    compileOnly 'org.jetbrains:annotations:24.0.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
+
+    zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+    annotationProcessor 'org.spongepowered:mixin:0.8.7:processor'
+}
+
+def sanitizeMinecraftMetadata = { File metadataFile ->
+    if (!metadataFile.exists()) {
+        return false
+    }
+
+    def metadata = new JsonSlurper().parse(metadataFile)
+    if (!(metadata instanceof Map) || !(metadata.libraries instanceof List)) {
+        return false
+    }
+
+    def libraries = metadata.libraries as List
+    def sanitizedLibraries = libraries.findAll { library ->
+        library?.name != brokenLwjglClassifier
+    }
+    if (sanitizedLibraries.size() == libraries.size()) {
+        return false
+    }
+
+    metadata.libraries = sanitizedLibraries
+    metadataFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(metadata))
+    true
+}
+
+def sanitizeMetadataCaches = {
+    def metadataCandidates = [
+            new File(gradle.gradleUserHomeDir, "caches/minecraft/versions/${minecraftVersion}/metadata.json"),
+            file(".gradle/caches/minecraft/versions/${minecraftVersion}/metadata.json")
+    ].unique()
+
+    metadataCandidates.each { metadataFile ->
+        if (sanitizeMinecraftMetadata(metadataFile)) {
+            logger.lifecycle("Sanitized ${brokenLwjglClassifier} from ${metadataFile}")
+        }
+    }
+}
+
+def sanitizeDummyIvy = { File ivyFile ->
+    if (!ivyFile.exists()) {
+        return false
+    }
+
+    def ivy = new XmlParser(false, false).parse(ivyFile)
+    def dependencies = ivy.dependencies?.getAt(0)
+    if (dependencies == null) {
+        return false
+    }
+
+    def brokenDependencies = dependencies.children().findAll { dependency ->
+        dependency.name() == 'dependency' &&
+                dependency.attribute('org') == 'org.lwjgl' &&
+                dependency.attribute('name') == 'lwjgl-freetype' &&
+                dependency.attribute('rev') == '3.3.3' &&
+                dependency.children().any { artifact ->
+                    artifact.name() == 'artifact' &&
+                            artifact.attribute('classifier') == 'natives-macos-patch'
+                }
+    }
+    if (brokenDependencies.isEmpty()) {
+        return false
+    }
+
+    brokenDependencies.each { dependencies.remove(it) }
+    ivyFile.text = XmlUtil.serialize(ivy)
+    true
+}
+
+def sanitizeResolutionInputs = {
+    sanitizeMetadataCaches()
+    def ivyFile = file(".gradle/repositories/ng_dummy_ng/net/neoforged/neoforge/${neoforgeVersion}/ivy-${neoforgeVersion}-ng2.xml")
+    if (sanitizeDummyIvy(ivyFile)) {
+        logger.lifecycle("Sanitized ${brokenLwjglClassifier} from ${ivyFile}")
+    }
+}
+
+def findCachedNeoFormLibrariesFile = {
+    def cacheRoot = new File(gradle.gradleUserHomeDir, 'caches/ng_execute')
+    if (!cacheRoot.exists()) {
+        return null
+    }
+
+    def candidates = fileTree(cacheRoot) {
+        include '**/libraries.txt'
+    }.files.findAll { candidate ->
+        candidate.isFile() &&
+                candidate.text.contains('lwjgl-freetype-3.3.3-natives-macos-arm64.jar') &&
+                !candidate.text.contains('natives-macos-patch')
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def jarContainsEntries = { File jarFile, List<String> requiredEntries ->
+    if (!jarFile.isFile()) {
+        return false
+    }
+
+    def zip = new ZipFile(jarFile)
+    try {
+        requiredEntries.every { entryName -> zip.getEntry(entryName) != null }
+    } finally {
+        zip.close()
+    }
+}
+
+def findCachedNeoFormSourceJar = {
+    def cacheRoot = new File(gradle.gradleUserHomeDir, 'caches/ng_execute')
+    if (!cacheRoot.exists()) {
+        return null
+    }
+
+    def candidates = fileTree(cacheRoot) {
+        include '**/outputs.jar'
+    }.files.findAll { candidate ->
+        jarContainsEntries(candidate, [
+                'META-INF/neoforge.mods.toml',
+                'com/mojang/blaze3d/Blaze3D.java',
+                'net/minecraft/server/MinecraftServer.java'
+        ])
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def findCachedNeoFormCompiledJar = {
+    def cacheRoot = new File(gradle.gradleUserHomeDir, 'caches/ng_execute')
+    if (!cacheRoot.exists()) {
+        return null
+    }
+
+    def candidates = fileTree(cacheRoot) {
+        include '**/outputs.jar'
+    }.files.findAll { candidate ->
+        jarContainsEntries(candidate, [
+                'com/mojang/blaze3d/Blaze3D.class',
+                'net/minecraft/server/MinecraftServer.class'
+        ])
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def findCachedNeoFormTsrgFile = {
+    def cacheRoot = new File(gradle.gradleUserHomeDir, 'caches/ng_execute')
+    if (!cacheRoot.exists()) {
+        return null
+    }
+
+    def candidates = fileTree(cacheRoot) {
+        include '**/outputs.tsrg'
+    }.files.findAll { candidate ->
+        candidate.isFile() && candidate.text.startsWith('tsrg2 ')
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def findGeneratedNeoFormNamedTsrgFile = {
+    def candidates = fileTree(buildDir) {
+        include 'neoForm/**/steps/mergeMappings/outputs.tsrg'
+    }.files.findAll { candidate ->
+        candidate.isFile() && candidate.text.startsWith('tsrg2 ')
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def findCachedNeoFormArchive = {
+    def cacheRoot = new File(gradle.gradleUserHomeDir, 'caches/modules-2/files-2.1/net.neoforged/neoform')
+    if (!cacheRoot.exists()) {
+        return null
+    }
+
+    def candidates = fileTree(cacheRoot) {
+        include "${minecraftVersion}-*/**/neoform-${minecraftVersion}-*.zip"
+    }.files.findAll { candidate ->
+        candidate.isFile()
+    }
+    candidates.sort { left, right ->
+        right.lastModified() <=> left.lastModified()
+    }
+    candidates ? candidates.first() : null
+}
+
+def createNamedToSrgTsrgFile = {
+    def namedSourceFile = findGeneratedNeoFormNamedTsrgFile()
+    if (namedSourceFile == null) {
+        throw new GradleException('Could not find generated NeoForm obf->named mappings')
+    }
+
+    def neoFormArchive = findCachedNeoFormArchive()
+    if (neoFormArchive == null) {
+        throw new GradleException('Could not find cached NeoForm archive with joined.tsrg')
+    }
+
+    def targetFile = file("${buildDir}/tmp/mixin/reobf-srg.tsrg")
+    targetFile.parentFile.mkdirs()
+
+    def obfToNamedClass = [:]
+    def memberIds = [:]
+
+    def archiveZip = new ZipFile(neoFormArchive)
+    def joinedEntry = archiveZip.getEntry('config/joined.tsrg')
+    if (joinedEntry == null) {
+        archiveZip.close()
+        throw new GradleException("Could not find config/joined.tsrg inside ${neoFormArchive}")
+    }
+
+    def joinedCurrentClass = null
+    archiveZip.getInputStream(joinedEntry).withCloseable { stream ->
+        stream.newReader('UTF-8').eachLine { line ->
+            if (line.startsWith('tsrg2') || line.trim().isEmpty() || line.startsWith('\t\t')) {
+                return
+            }
+
+            def parts = line.trim().split(/\s+/)
+            if (!line.startsWith('\t')) {
+                if (parts.length >= 2) {
+                    joinedCurrentClass = parts[0]
+                }
+                return
+            }
+
+            if (joinedCurrentClass == null) {
+                return
+            }
+
+            if (parts.length == 3) {
+                memberIds["F|${joinedCurrentClass}|${parts[0]}"] = parts[2]
+            } else if (parts.length >= 4 && parts[1].startsWith('(')) {
+                memberIds["M|${joinedCurrentClass}|${parts[0]}|${parts[1]}"] = parts[3]
+            }
+        }
+    }
+    archiveZip.close()
+
+    namedSourceFile.eachLine { line ->
+        if (line.startsWith('tsrg2') || line.trim().isEmpty() || line.startsWith('\t\t')) {
+            return
+        }
+        if (line.startsWith('\t')) {
+            return
+        }
+        def parts = line.trim().split(/\s+/)
+        if (parts.length >= 2) {
+            obfToNamedClass[parts[0]] = parts[1]
+        }
+    }
+
+    def remapDescriptorToNamed = { String descriptor ->
+        descriptor.replaceAll(/L([^;]+);/) { full, className ->
+            "L${obfToNamedClass.getOrDefault(className as String, className as String)};"
+        }
+    }
+
+    def seargeFieldName = { String obfName, String namedName, String id ->
+        if (obfName == namedName || id == null) {
+            return namedName
+        }
+        "f_${id}_"
+    }
+
+    def seargeMethodName = { String obfName, String namedName, String id ->
+        if (namedName in ['<init>', '<clinit>'] || obfName == namedName || id == null) {
+            return namedName
+        }
+        "m_${id}_"
+    }
+
+    def generatedLines = ['tsrg2 left right']
+    def namedCurrentClass = null
+    def obfCurrentClass = null
+    namedSourceFile.eachLine { line ->
+        if (line.startsWith('tsrg2') || line.trim().isEmpty() || line.startsWith('\t\t')) {
+            return
+        }
+
+        def parts = line.trim().split(/\s+/)
+        if (!line.startsWith('\t')) {
+            if (parts.length >= 2) {
+                obfCurrentClass = parts[0]
+                namedCurrentClass = parts[1]
+                generatedLines << "${namedCurrentClass} ${namedCurrentClass}"
+            }
+            return
+        }
+
+        if (namedCurrentClass == null || obfCurrentClass == null) {
+            return
+        }
+
+        if (parts.length == 2) {
+            def fieldId = memberIds["F|${obfCurrentClass}|${parts[0]}"]
+            generatedLines << "\t${parts[1]} ${seargeFieldName(parts[0], parts[1], fieldId)}"
+        } else if (parts.length >= 3 && parts[1].startsWith('(')) {
+            def methodId = memberIds["M|${obfCurrentClass}|${parts[0]}|${parts[1]}"]
+            generatedLines << "\t${parts[2]} ${remapDescriptorToNamed(parts[1])} ${seargeMethodName(parts[0], parts[2], methodId)}"
+        }
+    }
+
+    targetFile.text = generatedLines.join(System.lineSeparator()) + System.lineSeparator()
+    targetFile
+}
+
+def sanitizeMinecraftVersionMetadata = tasks.register('sanitizeMinecraftVersionMetadata') {
+    dependsOn "cacheVersionManifest${minecraftVersion}"
+    doLast {
+        sanitizeResolutionInputs()
+    }
+}
+
+tasks.matching { it.name in ['neoFormListLibraries', 'neoFormListTransformLibraries'] }.configureEach {
+    dependsOn sanitizeMinecraftVersionMetadata
+}
+
+sanitizeResolutionInputs()
+
+configurations.configureEach {
+    incoming.beforeResolve {
+        sanitizeResolutionInputs()
+    }
+}
+
+def prepareNeoFormLibraries = tasks.register('prepareNeoFormLibraries')
+def prepareNeoFormTransformLibraries = tasks.register('prepareNeoFormTransformLibraries')
+def prepareNeoFormTransformedSources = tasks.register('prepareNeoFormTransformedSources')
+def prepareNeoFormRecompiledJar = tasks.register('prepareNeoFormRecompiledJar')
+def prepareNeoFormMixinMappings = tasks.register('prepareNeoFormMixinMappings')
+
+gradle.projectsEvaluated {
+    def originalTask = tasks.findByName('neoFormListLibraries')
+    def originalTransformTask = tasks.findByName('neoFormListTransformLibraries')
+    def originalTransformSourceTask = tasks.findByName('neoFormTransformSource')
+    def originalRecompileTask = tasks.findByName('neoFormRecompile')
+    def originalMergeMappingsTask = tasks.findByName('neoFormMergeMappings')
+    if (originalTask == null || originalTransformTask == null || originalTransformSourceTask == null || originalRecompileTask == null || originalMergeMappingsTask == null) {
+        return
+    }
+
+    def useCachedLibraries = findCachedNeoFormLibrariesFile() != null
+    def useCachedTransformLibraries = findCachedNeoFormLibrariesFile() != null
+    def useCachedTransformedSources = findCachedNeoFormSourceJar() != null
+    def useCachedRecompiledJar = findCachedNeoFormCompiledJar() != null
+
+    prepareNeoFormLibraries.configure {
+        onlyIf { useCachedLibraries }
+        dependsOn sanitizeMinecraftVersionMetadata
+        doLast {
+            def sourceFile = findCachedNeoFormLibrariesFile()
+            if (sourceFile == null) {
+                throw new GradleException('Could not find a cached NeoForm libraries.txt without the broken macOS patch artifact')
+            }
+
+            def outputFile = originalTask.output.get().asFile
+            outputFile.parentFile.mkdirs()
+            outputFile.text = sourceFile.readLines().findAll { line ->
+                !line.contains('natives-macos-patch')
+            }.join(System.lineSeparator()) + System.lineSeparator()
+            originalTask.librariesDirectory.get().asFile.mkdirs()
+        }
+    }
+
+    prepareNeoFormTransformLibraries.configure {
+        onlyIf { useCachedTransformLibraries }
+        dependsOn sanitizeMinecraftVersionMetadata
+        doLast {
+            def sourceFile = findCachedNeoFormLibrariesFile()
+            if (sourceFile == null) {
+                throw new GradleException('Could not find a cached NeoForm libraries.txt without the broken macOS patch artifact')
+            }
+
+            def outputFile = originalTransformTask.output.get().asFile
+            outputFile.parentFile.mkdirs()
+            outputFile.text = sourceFile.readLines().findAll { line ->
+                !line.contains('natives-macos-patch')
+            }.join(System.lineSeparator()) + System.lineSeparator()
+            originalTransformTask.librariesDirectory.get().asFile.mkdirs()
+        }
+    }
+
+    prepareNeoFormTransformedSources.configure {
+        onlyIf { useCachedTransformedSources }
+        dependsOn sanitizeMinecraftVersionMetadata
+        doLast {
+            def sourceJar = findCachedNeoFormSourceJar()
+            if (sourceJar == null) {
+                throw new GradleException('Could not find a cached NeoForm transformed source jar')
+            }
+
+            def outputFile = originalTransformSourceTask.output.get().asFile
+            outputFile.parentFile.mkdirs()
+            outputFile.bytes = sourceJar.bytes
+        }
+    }
+
+    prepareNeoFormRecompiledJar.configure {
+        onlyIf { useCachedRecompiledJar }
+        dependsOn prepareNeoFormTransformedSources
+        doLast {
+            def compiledJar = findCachedNeoFormCompiledJar()
+            if (compiledJar == null) {
+                throw new GradleException('Could not find a cached NeoForm compiled jar')
+            }
+
+            def outputFile = originalRecompileTask.output.get().asFile
+            outputFile.parentFile.mkdirs()
+            outputFile.bytes = compiledJar.bytes
+        }
+    }
+
+    prepareNeoFormMixinMappings.configure {
+        dependsOn originalMergeMappingsTask
+        doLast {
+            createNamedToSrgTsrgFile()
+        }
+    }
+
+    originalTask.onlyIf { !useCachedLibraries }
+    originalTransformTask.onlyIf { !useCachedTransformLibraries }
+    originalTransformSourceTask.onlyIf { !useCachedTransformedSources }
+    originalRecompileTask.onlyIf { !useCachedRecompiledJar }
+    tasks.matching { candidate ->
+        candidate.name.startsWith('neoForm') &&
+                candidate.name != 'neoFormListLibraries' &&
+                candidate.name != 'neoFormListTransformLibraries' &&
+                candidate.name != 'prepareNeoFormLibraries' &&
+                candidate.name != 'prepareNeoFormTransformLibraries' &&
+                candidate.name != 'prepareNeoFormTransformedSources' &&
+                candidate.name != 'prepareNeoFormRecompiledJar'
+    }.configureEach {
+        if (useCachedLibraries) {
+            dependsOn prepareNeoFormLibraries
+        }
+        if (useCachedTransformLibraries) {
+            dependsOn prepareNeoFormTransformLibraries
+        }
+        if (useCachedTransformedSources) {
+            dependsOn prepareNeoFormTransformedSources
+        }
+        if (useCachedRecompiledJar) {
+            dependsOn prepareNeoFormRecompiledJar
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileStorageMixin.java')
+    }
+    def compilerArgs = [
+            "-AoutRefMapFile=${layout.buildDirectory.file("resources/main/${modId}.refmap.json").get().asFile.absolutePath}"
+    ]
+    dependsOn prepareNeoFormMixinMappings
+    compilerArgs += [
+            '-AmappingTypes=tsrg',
+            "-AreobfTsrgFile=${file("${buildDir}/tmp/mixin/reobf-srg.tsrg").absolutePath}"
+    ]
+    options.compilerArgs += compilerArgs
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def replaceProperties = [
+            minecraft_version      : minecraftVersion,
+            minecraft_version_range: minecraftVersionRange,
+            neoforge_version       : neoforgeVersion,
+            neoforge_version_range : neoforgeVersionRange,
+            loader_version_range   : loaderVersionRange,
+            mod_config_name        : modConfigName,
+            mod_id                 : modId,
+            mod_name               : modName,
+            mod_license            : modLicense,
+            mod_version            : project.version,
+            mod_authors            : modAuthors,
+            mod_description        : modDescription,
+    ]
+    inputs.properties replaceProperties
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    enabled = false
+}
+
+tasks.matching { it.name in ['testJunit', 'writeMinecraftClasspathJunit'] }.configureEach {
+    enabled = false
+}
+
+tasks.named('jar', Jar).configure {
+    archiveFileName.set("${artifactStem}.jar")
+}
+
+tasks.named('sourcesJar', Jar).configure {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileStorageMixin.java')
+    }
+}
+
+jar {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from(rootProject.file('LICENSE')) {
+        rename { 'LICENSE.txt' }
+        into '/'
+    }
+    from(rootProject.file('README.md')) { into '/' }
+
+    manifest {
+        attributes([
+                'Specification-Title'     : modId,
+                'Specification-Vendor'    : modAuthors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : modAuthors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'MixinConfigs'            : "${modId}.mixins.json"
+        ])
+    }
+}

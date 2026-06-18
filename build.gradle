@@ -27,7 +27,8 @@ def forge1215Target = targetOrNull(':targets:forge_1_21_5')
 def forge1216To12110Target = targetOrNull(':targets:forge_1_21_6_to_1_21_10')
 def forge12111Target = targetOrNull(':targets:forge_1_21_11')
 def forge261To2612Target = targetOrNull(':targets:forge_26_1_to_26_1_2')
-def neoforge1211Target = targetOrNull(':targets:neoforge_1_21_1')
+def neoforge1202To1204Target = targetOrNull(':targets:neoforge_1_20_2_1_20_4')
+def neoforge1211To1214Target = targetOrNull(':targets:neoforge_1_21_1_to_1_21_4')
 
 def fabricTargets = [
         fabric1201Target,
@@ -45,7 +46,8 @@ def forgeNeoForgeTargets = [
         forge1216To12110Target,
         forge12111Target,
         forge261To2612Target,
-        neoforge1211Target
+        neoforge1202To1204Target,
+        neoforge1211To1214Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
 
@@ -88,11 +90,11 @@ tasks.register('compileForge') {
 tasks.register('compileNeoForge') {
     group = 'linearreader'
     description = 'Compiles the NeoForge target.'
-    if (neoforge1211Target != null) {
-        dependsOn neoforge1211Target.tasks.named('compileJava')
+    if (neoforge1211To1214Target != null) {
+        dependsOn neoforge1211To1214Target.tasks.named('compileJava')
     }
     doFirst {
-        requireIncludedTarget('NeoForge target', neoforge1211Target)
+        requireIncludedTarget('NeoForge target', neoforge1211To1214Target)
     }
 }
 
@@ -123,11 +125,11 @@ tasks.register('buildForge') {
 tasks.register('buildNeoForge') {
     group = 'linearreader'
     description = 'Builds the NeoForge target.'
-    if (neoforge1211Target != null) {
-        dependsOn neoforge1211Target.tasks.named('build')
+    if (neoforge1211To1214Target != null) {
+        dependsOn neoforge1211To1214Target.tasks.named('build')
     }
     doFirst {
-        requireIncludedTarget('NeoForge target', neoforge1211Target)
+        requireIncludedTarget('NeoForge target', neoforge1211To1214Target)
     }
 }
 
@@ -158,11 +160,11 @@ tasks.register('cleanForge') {
 tasks.register('cleanNeoForge') {
     group = 'linearreader'
     description = 'Cleans the NeoForge target.'
-    if (neoforge1211Target != null) {
-        dependsOn neoforge1211Target.tasks.named('clean')
+    if (neoforge1211To1214Target != null) {
+        dependsOn neoforge1211To1214Target.tasks.named('clean')
     }
     doFirst {
-        requireIncludedTarget('NeoForge target', neoforge1211Target)
+        requireIncludedTarget('NeoForge target', neoforge1211To1214Target)
     }
 }
 
@@ -193,11 +195,11 @@ tasks.register('testForge') {
 tasks.register('testNeoForge') {
     group = 'linearreader'
     description = 'Runs the NeoForge target tests.'
-    if (neoforge1211Target != null) {
-        dependsOn neoforge1211Target.tasks.named('test')
+    if (neoforge1211To1214Target != null) {
+        dependsOn neoforge1211To1214Target.tasks.named('test')
     }
     doFirst {
-        requireIncludedTarget('NeoForge target', neoforge1211Target)
+        requireIncludedTarget('NeoForge target', neoforge1211To1214Target)
     }
 }
 

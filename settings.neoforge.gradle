@@ -15,5 +15,8 @@ rootProject.buildFileName = "build-neoforge.gradle"
 include(":targets")
 project(":targets").projectDir = file("modules/targets")
 
-include(":targets:neoforge_1_21_1")
-project(":targets:neoforge_1_21_1").projectDir = file("modules/targets/neoforge_1_21_1")
+include(":targets:neoforge_1_20_2_to_1_20_4")
+project(":targets:neoforge_1_20_2_to_1_20_4").projectDir = file("modules/targets/neoforge_1_20_2_to_1_20_4")
+
+include(":targets:neoforge_1_21_1_to_1_21_4")
+project(":targets:neoforge_1_21_1_to_1_21_4").projectDir = file("modules/targets/neoforge_1_21_1_to_1_21_4")

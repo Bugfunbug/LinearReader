@@ -1,7 +1,7 @@
 package com.bugfunbug.linearreader;
 
 import com.bugfunbug.linearreader.mc1202to1214.Minecraft1202To1214Family;
-import com.bugfunbug.linearreader.targets.NeoForge1211Target;
+import com.bugfunbug.linearreader.targets.NeoForge1211To1214Target;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -14,6 +14,6 @@ public class LinearReader {
     }
 
     public LinearReader(IEventBus modEventBus, ModContainer modContainer) {
-        new NeoForge1211Target(modEventBus, modContainer);
+        new NeoForge1211To1214Target(modEventBus, modContainer);
     }
 }
