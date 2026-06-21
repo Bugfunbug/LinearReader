@@ -1,0 +1,191 @@
+import java.util.Properties
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.gradle.userdev' version '7.1.26'
+}
+
+def targetProperties = new Properties()
+file('gradle.properties').withInputStream(targetProperties.&load)
+
+def targetProperty = { String name ->
+    def value = targetProperties.getProperty(name)
+    if (value == null) {
+        throw new GradleException("Missing target property '${name}' in ${projectDir}/gradle.properties")
+    }
+    value
+}
+
+def minecraftVersion = targetProperty('minecraft_version')
+def minecraftVersionRange = targetProperty('minecraft_version_range')
+def minecraftVersionRangeLabel = targetProperty('minecraft_version_range_label')
+def neoforgeVersion = targetProperty('neoforge_version')
+def neoforgeVersionRange = targetProperty('neoforge_version_range')
+def loaderVersionRange = targetProperty('loader_version_range')
+def modConfigName = targetProperty('mod_config_name')
+def zstdVersion = targetProperty('zstd_version')
+def modId = targetProperty('mod_id')
+def modName = targetProperty('mod_name')
+def modLicense = targetProperty('mod_license')
+def modAuthors = targetProperty('mod_authors')
+def modDescription = targetProperty('mod_description')
+
+version = targetProperty('mod_version')
+group = targetProperty('mod_group_id')
+
+def artifactStem = "${modId}-${project.version}-neoforge-${minecraftVersionRangeLabel}"
+
+base {
+    archivesName = modId + '-neoforge'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+sourceSets {
+    main {
+        java.srcDir rootProject.file('modules/core/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/neoforge_1_20_5_to_1_21/src/main/java')
+        java.srcDir rootProject.file('modules/targets/src/main/java')
+    }
+    test {
+        java.srcDir rootProject.file('modules/core-testkit/src/test/java')
+        resources.srcDir rootProject.file('modules/core-testkit/src/test/resources')
+    }
+}
+
+configurations {
+    zstdRuntime
+}
+
+repositories {
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'LocalLwjglPatch'
+                url = rootProject.file('build-logic/local-maven')
+                metadataSources {
+                    mavenPom()
+                    artifact()
+                }
+            }
+        }
+        filter {
+            includeModule('org.lwjgl', 'lwjgl-freetype')
+        }
+    }
+    maven {
+        name = 'NeoForged'
+        url = 'https://maven.neoforged.net/releases'
+    }
+    maven {
+        name = 'LWJGL'
+        url = 'https://build.lwjgl.org/release'
+        content {
+            includeGroup 'org.lwjgl'
+        }
+        metadataSources {
+            mavenPom()
+            artifact()
+        }
+    }
+    mavenCentral()
+}
+
+dependencies {
+    implementation "net.neoforged:neoforge:${neoforgeVersion}"
+    compileOnly 'org.jetbrains:annotations:24.0.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
+    zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
+    }
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def replaceProperties = [
+            minecraft_version      : minecraftVersion,
+            minecraft_version_range: minecraftVersionRange,
+            neoforge_version       : neoforgeVersion,
+            neoforge_version_range : neoforgeVersionRange,
+            loader_version_range   : loaderVersionRange,
+            mod_config_name        : modConfigName,
+            mod_id                 : modId,
+            mod_name               : modName,
+            mod_license            : modLicense,
+            mod_version            : project.version,
+            mod_authors            : modAuthors,
+            mod_description        : modDescription,
+    ]
+    inputs.properties replaceProperties
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand replaceProperties + [project: project]
+    }
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    enabled = false
+}
+
+tasks.named('jar', Jar).configure {
+    archiveFileName.set("${artifactStem}.jar")
+}
+
+tasks.named('sourcesJar', Jar).configure {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
+    }
+}
+
+jar {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from(rootProject.file('LICENSE')) {
+        rename { 'LICENSE.txt' }
+        into '/'
+    }
+    from(rootProject.file('README.md')) { into '/' }
+
+    manifest {
+        attributes([
+                'Specification-Title'     : modId,
+                'Specification-Vendor'    : modAuthors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : modAuthors,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'MixinConfigs'            : "${modId}.mixins.json"
+        ])
+    }
+}

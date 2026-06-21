@@ -18,5 +18,17 @@ project(":targets").projectDir = file("modules/targets")
 include(":targets:neoforge_1_20_2_to_1_20_4")
 project(":targets:neoforge_1_20_2_to_1_20_4").projectDir = file("modules/targets/neoforge_1_20_2_to_1_20_4")
 
+include(":targets:neoforge_1_20_5_to_1_21")
+project(":targets:neoforge_1_20_5_to_1_21").projectDir = file("modules/targets/neoforge_1_20_5_to_1_21")
+
 include(":targets:neoforge_1_21_1_to_1_21_4")
 project(":targets:neoforge_1_21_1_to_1_21_4").projectDir = file("modules/targets/neoforge_1_21_1_to_1_21_4")
+
+include(":targets:neoforge_1_21_5_to_1_21_7")
+project(":targets:neoforge_1_21_5_to_1_21_7").projectDir = file("modules/targets/neoforge_1_21_5_to_1_21_7")
+
+include(":targets:neoforge_1_21_8")
+project(":targets:neoforge_1_21_8").projectDir = file("modules/targets/neoforge_1_21_8")
+
+include(":targets:neoforge_1_21_9_to_1_21_10")
+project(":targets:neoforge_1_21_9_to_1_21_10").projectDir = file("modules/targets/neoforge_1_21_9_to_1_21_10")

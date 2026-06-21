@@ -11,7 +11,7 @@ def targetOrNull = { String path ->
 def requireIncludedTarget = { String label, Project target ->
     if (target == null) {
         throw new GradleException("${label} is not included in this Gradle runtime. "
-                + "Use Gradle 8 for Forge/NeoForge targets and Gradle 9 for Fabric 26.1.x.")
+                + "Use Gradle 8 for pre-26.1 targets and Gradle 9 for post-26.1.")
     }
 }
 
@@ -27,8 +27,12 @@ def forge1215Target = targetOrNull(':targets:forge_1_21_5')
 def forge1216To12110Target = targetOrNull(':targets:forge_1_21_6_to_1_21_10')
 def forge12111Target = targetOrNull(':targets:forge_1_21_11')
 def forge261To262Target = targetOrNull(':targets:forge_26_1_to_26_2')
-// def neoforge1202To1204Target = targetOrNull(':targets:neoforge_1_20_2_1_20_4')
+def neoforge1202To1204Target = targetOrNull(':targets:neoforge_1_20_2_to_1_20_4')
+def neoforge1205To121Target = targetOrNull(':targets:neoforge_1_20_5_to_1_21')
 def neoforge1211To1214Target = targetOrNull(':targets:neoforge_1_21_1_to_1_21_4')
+def neoforge1215To1217Target = targetOrNull(':targets:neoforge_1_21_5_to_1_21_7')
+def neoforge1218Target = targetOrNull(':targets:neoforge_1_21_8')
+def neoforge1219To12110Target = targetOrNull(':targets:neoforge_1_21_9_to_1_21_10')
 
 def fabricTargets = [
         fabric1201Target,
@@ -46,8 +50,12 @@ def forgeNeoForgeTargets = [
         forge1216To12110Target,
         forge12111Target,
         forge261To262Target,
-        // neoforge1202To1204Target,
-        neoforge1211To1214Target
+        neoforge1202To1204Target,
+        neoforge1205To121Target,
+        neoforge1211To1214Target,
+        neoforge1215To1217Target,
+        neoforge1218Target,
+        neoforge1219To12110Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
 
