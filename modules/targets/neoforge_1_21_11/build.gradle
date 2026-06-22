@@ -3,7 +3,7 @@ import java.util.Properties
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id 'net.neoforged.moddev' // Inherited from root classloader
+    id 'net.neoforged.moddev'
 }
 
 def targetProperties = new Properties()
@@ -58,16 +58,10 @@ sourceSets {
     main {
         java.srcDir rootProject.file('modules/core/src/main/java')
         java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
-        java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_11/src/main/java')
         java.srcDir rootProject.file('modules/loader-families/src/main/java')
-        java.srcDir rootProject.file('modules/loader-families/neoforge_1_21_1_to_1_21_10/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/neoforge_1_21_11_to_26_1_2/src/main/java')
         java.srcDir rootProject.file('modules/targets/src/main/java')
-    }
-    test {
-        java.srcDir rootProject.file('modules/core-testkit/src/test/java')
-        resources.srcDir rootProject.file('modules/core-testkit/src/test/resources')
-        compileClasspath += sourceSets.main.compileClasspath
-        runtimeClasspath += sourceSets.main.runtimeClasspath
     }
 }
 
@@ -80,27 +74,17 @@ repositories {
 }
 
 dependencies {
-    implementation "net.neoforged:neoforge:${neoforgeVersion}"
     compileOnly 'org.jetbrains:annotations:24.0.1'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
-    testImplementation sourceSets.main.output
     testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
     zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
 }
 
 tasks.withType(JavaCompile).configureEach {
-    // exclude the files from core/ and mc_1_21_5_to_1_21_10/ so that we can use the NeoForge specific versions of them
     exclude { details ->
         details.file == rootProject.file(
-                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110ChunkNbtAdapter.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileStorageMixin.java')
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
     }
-    options.compilerArgs += ["-AdisableRefMap=true"]
     options.release = 21
     options.encoding = 'UTF-8'
 }
@@ -138,25 +122,14 @@ tasks.named('test', Test).configure {
     enabled = false
 }
 
-tasks.matching { it.name in ['testJunit', 'writeMinecraftClasspathJunit'] }.configureEach {
-    enabled = false
-}
-
 tasks.named('jar', Jar).configure {
     archiveFileName.set("${artifactStem}.jar")
 }
 
 tasks.named('sourcesJar', Jar).configure {
-    // exclude these files from core/ and mc_1_21_5_to_1_21_10/ so that we can use the NeoForge specific versions of them
     exclude { details ->
         details.file == rootProject.file(
-                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110ChunkNbtAdapter.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
-                details.file == rootProject.file(
-                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileStorageMixin.java')
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
     }
 }
 
@@ -181,8 +154,7 @@ jar {
                 'Implementation-Title'    : project.name,
                 'Implementation-Version'  : project.jar.archiveVersion,
                 'Implementation-Vendor'   : modAuthors,
-                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
-                'MixinConfigs'            : "linearreader.mixins.json"
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
         ])
     }
 }

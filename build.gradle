@@ -2,6 +2,7 @@ import org.gradle.util.GradleVersion
 
 plugins {
     id 'base'
+    id 'net.neoforged.moddev' version '2.0.141' apply false
 }
 
 def targetOrNull = { String path ->
@@ -33,6 +34,7 @@ def neoforge1211To1214Target = targetOrNull(':targets:neoforge_1_21_1_to_1_21_4'
 def neoforge1215To1217Target = targetOrNull(':targets:neoforge_1_21_5_to_1_21_7')
 def neoforge1218Target = targetOrNull(':targets:neoforge_1_21_8')
 def neoforge1219To12110Target = targetOrNull(':targets:neoforge_1_21_9_to_1_21_10')
+def neoforge12111Target = targetOrNull(':targets:neoforge_1_21_11')
 
 def fabricTargets = [
         fabric1201Target,
@@ -55,7 +57,8 @@ def forgeNeoForgeTargets = [
         neoforge1211To1214Target,
         neoforge1215To1217Target,
         neoforge1218Target,
-        neoforge1219To12110Target
+        neoforge1219To12110Target,
+        neoforge12111Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
 
