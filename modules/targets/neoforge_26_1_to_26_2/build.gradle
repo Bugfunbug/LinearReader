@@ -41,7 +41,7 @@ base {
 }
 
 java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    toolchain.languageVersion = JavaLanguageVersion.of(25)
     withSourcesJar()
 }
 
@@ -58,7 +58,7 @@ sourceSets {
     main {
         java.srcDir rootProject.file('modules/core/src/main/java')
         java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
-        java.srcDir rootProject.file('modules/minecraft-families/mc_1_21_11/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_26_1_to_26_2/src/main/java')
         java.srcDir rootProject.file('modules/loader-families/src/main/java')
         java.srcDir rootProject.file('modules/loader-families/neoforge_1_21_11_to_26_2/src/main/java')
         java.srcDir rootProject.file('modules/targets/src/main/java')
@@ -85,7 +85,7 @@ tasks.withType(JavaCompile).configureEach {
         details.file == rootProject.file(
                 'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
     }
-    options.release = 21
+    options.release = 25
     options.encoding = 'UTF-8'
 }
 

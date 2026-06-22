@@ -35,3 +35,6 @@ project(":targets:neoforge_1_21_9_to_1_21_10").projectDir = file("modules/target
 
 include(":targets:neoforge_1_21_11")
 project(":targets:neoforge_1_21_11").projectDir = file("modules/targets/neoforge_1_21_11")
+
+include(":targets:neoforge_26_1_to_26_2")
+project(":targets:neoforge_26_1_to_26_2").projectDir = file("modules/targets/neoforge_26_1_to_26_2")

@@ -16,12 +16,12 @@ import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
-public final class NeoForge12111To2612Bootstrap implements LoaderBootstrap {
+public final class NeoForge12111To262Bootstrap implements LoaderBootstrap {
 
     private final MinecraftFamily minecraftFamily;
     private final LinearRuntime runtime;
 
-    public NeoForge12111To2612Bootstrap(MinecraftFamily minecraftFamily, IEventBus modEventBus, ModContainer modContainer) {
+    public NeoForge12111To262Bootstrap(MinecraftFamily minecraftFamily, IEventBus modEventBus, ModContainer modContainer) {
         this.minecraftFamily = minecraftFamily;
         this.runtime = installRuntime();
 

@@ -35,6 +35,7 @@ def neoforge1215To1217Target = targetOrNull(':targets:neoforge_1_21_5_to_1_21_7'
 def neoforge1218Target = targetOrNull(':targets:neoforge_1_21_8')
 def neoforge1219To12110Target = targetOrNull(':targets:neoforge_1_21_9_to_1_21_10')
 def neoforge12111Target = targetOrNull(':targets:neoforge_1_21_11')
+def neoforge261To262Target = targetOrNull(':targets:neoforge_26_1_to_26_2')
 
 def fabricTargets = [
         fabric1201Target,
@@ -58,7 +59,8 @@ def forgeNeoForgeTargets = [
         neoforge1215To1217Target,
         neoforge1218Target,
         neoforge1219To12110Target,
-        neoforge12111Target
+        neoforge12111Target,
+        neoforge261To262Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
 
@@ -335,6 +337,13 @@ if (gradle9DelegateAvailable) {
                     exclude '*-sources.jar', '*-javadoc.jar'
                 }
                 into layout.buildDirectory.dir('collected-jars/forge_26_1_to_26_2')
+            }
+            copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/neoforge_26_1_to_26_2/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/neoforge_26_1_to_26_2')
             }
         }
     }
