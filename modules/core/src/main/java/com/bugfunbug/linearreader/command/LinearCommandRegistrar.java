@@ -10,12 +10,21 @@ import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.suggestion.Suggestions;
+import com.mojang.brigadier.suggestion.SuggestionsBuilder;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.commands.SharedSuggestionProvider;
 
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -85,6 +94,15 @@ public final class LinearCommandRegistrar {
                                         .executes(LinearCommandRegistrar::executeExportStart))
                                 .then(Commands.literal("stop")
                                         .executes(LinearCommandRegistrar::executeExportStop)))
+                        .then(Commands.literal("graph")
+                                .executes(LinearCommandRegistrar::executeGraphStatus)
+                                .then(Commands.literal("stop")
+                                    .executes(LinearCommandRegistrar::executeGraphStop))
+                                .then(Commands.literal("status")
+                                    .executes(LinearCommandRegistrar::executeGraphStatus))
+                                .then(Commands.argument("args", StringArgumentType.greedyString())
+                                    .suggests(LinearCommandRegistrar::suggestGraphArgs)
+                                    .executes(LinearCommandRegistrar::executeGraph)))
         );
     }
 
@@ -623,6 +641,335 @@ public final class LinearCommandRegistrar {
         ctx.getSource().sendSuccess(() -> Component.literal(
                 "§e[LinearReader] Export stop requested. Already-exported files are kept."), false);
         return 1;
+    }
+
+    // -------------------------------------------------------------------------
+    // /linearreader graph [stop | status | <stat> [stat2 ...] [duration:N|until-stopped] [interval:N] [single-graph]]
+    // -------------------------------------------------------------------------
+
+    /**
+     * Parses and starts a new graph recording.
+     *
+     * <p>Positional argument order (space-separated, no key: prefixes):
+     * <ol>
+     *   <li><b>Duration</b> — a positive integer (seconds) or the literal
+     *       {@code until-stopped} (records until {@code graph stop}).</li>
+     *   <li><b>Interval</b> — a positive integer (seconds between samples).</li>
+     *   <li><b>Mode</b> (optional) — {@code single-graph} or
+     *       {@code multiple-graphs} (defaults to multiple-graphs).</li>
+     *   <li><b>Stats</b> — one or more {@link GraphStat} keys.</li>
+     * </ol>
+     *
+     * <p>Example: {@code /linearreader graph 300 10 single-graph chunk_read_avg_ms quietness_score}
+     */
+    private static int executeGraph(CommandContext<CommandSourceStack> ctx) {
+        String rawArgs = StringArgumentType.getString(ctx, "args").trim();
+        CommandSourceStack source = ctx.getSource();
+
+        if (rawArgs.isEmpty()) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Usage: /linearreader graph <duration|until-stopped> <interval> "
+                            + "[single-graph|multiple-graphs] <stat> [stat2 ...]\n"
+                            + "§7  Example: §f/linearreader graph 300 10 chunk_read_avg_ms quietness_score"));
+            return 0;
+        }
+
+        String[] tokens = rawArgs.split("\\s+");
+        int cursor = 0;
+
+        // ── Token 1: duration ────────────────────────────────────────────────
+        if (cursor >= tokens.length) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Missing duration. Provide a number of seconds or 'until-stopped'."));
+            return 0;
+        }
+        int durationSeconds;
+        boolean untilStopped = tokens[cursor].equals("until-stopped");
+        if (untilStopped) {
+            durationSeconds = -1;
+        } else {
+            try {
+                durationSeconds = Integer.parseInt(tokens[cursor]);
+                if (durationSeconds <= 0) {
+                    source.sendFailure(Component.literal(
+                            "[LinearReader] Duration must be a positive number of seconds; got: "
+                                    + tokens[cursor]));
+                    return 0;
+                }
+            } catch (NumberFormatException e) {
+                source.sendFailure(Component.literal(
+                        "[LinearReader] Expected duration (number of seconds or 'until-stopped'), "
+                                + "got: §f" + tokens[cursor]));
+                return 0;
+            }
+        }
+        cursor++;
+
+        // ── Token 2: interval ────────────────────────────────────────────────
+        if (cursor >= tokens.length) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Missing interval. Provide a sample interval in seconds."));
+            return 0;
+        }
+        int intervalSeconds;
+        try {
+            intervalSeconds = Integer.parseInt(tokens[cursor]);
+            if (intervalSeconds <= 0) {
+                source.sendFailure(Component.literal(
+                        "[LinearReader] Interval must be a positive number of seconds; got: "
+                                + tokens[cursor]));
+                return 0;
+            }
+        } catch (NumberFormatException e) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Expected interval (number of seconds), got: §f" + tokens[cursor]));
+            return 0;
+        }
+        cursor++;
+
+        // ── Token 3 (required): render mode ─────────────────────────────────
+        if (cursor >= tokens.length) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Missing render mode. Specify §fsingle-graph§c or §fmultiple-graphs§c."));
+            return 0;
+        }
+        boolean singleGraph;
+        if (tokens[cursor].equals("single-graph")) {
+            singleGraph = true;
+        } else if (tokens[cursor].equals("multiple-graphs")) {
+            singleGraph = false;
+        } else {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Expected 'single-graph' or 'multiple-graphs', got: §f"
+                            + tokens[cursor]));
+            return 0;
+        }
+        cursor++;
+
+        // ── Remaining tokens: stat keys ──────────────────────────────────────
+        if (cursor >= tokens.length) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] No stat keys provided. "
+                            + "Example stats: §fchunk_read_avg_ms quietness_score pressure_score"));
+            return 0;
+        }
+        Set<GraphStat> stats = new java.util.LinkedHashSet<>();
+        List<String> unknownTokens = new ArrayList<>();
+        while (cursor < tokens.length) {
+            String token = tokens[cursor++];
+            GraphStat stat = GraphStat.fromKey(token);
+            if (stat != null) {
+                stats.add(stat);
+            } else {
+                unknownTokens.add(token);
+            }
+        }
+        if (!unknownTokens.isEmpty()) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] Unknown stat key(s): " + String.join(", ", unknownTokens)));
+            return 0;
+        }
+        if (stats.isEmpty()) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] No valid stat keys found in the arguments."));
+            return 0;
+        }
+
+        // ── Ensure LinearStats is enabled ────────────────────────────────────
+        if (!LinearStats.isEnabled()) {
+            LinearStats.enableAndReset();
+            source.sendSuccess(() -> Component.literal(
+                    "§e[LinearReader] bench stats were not active — enabled and reset the "
+                            + "measurement window now."), false);
+        }
+
+        // ── Start sampler ────────────────────────────────────────────────────
+        Path worldRoot = LinearRuntime.getWorldRoot();
+        if (worldRoot == null) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] World root is not available — is the server fully started?"));
+            return 0;
+        }
+
+        final int finalDuration = durationSeconds;
+        final int finalInterval = intervalSeconds;
+        final boolean finalSingle = singleGraph;
+        final Set<GraphStat> finalStats = stats;
+
+        boolean started = GraphSampler.start(
+                finalStats, finalInterval, finalDuration, finalSingle, worldRoot,
+                (outputPaths, error) -> {
+                    if (error != null) {
+                        source.sendSuccess(() -> Component.literal(
+                                "§c[LinearReader] Graph recording failed: " + error), false);
+                        return;
+                    }
+                    if (outputPaths.isEmpty()) {
+                        source.sendSuccess(() -> Component.literal(
+                                "§e[LinearReader] Graph recording finished but produced no data."), false);
+                        return;
+                    }
+                    StringBuilder msg = new StringBuilder(
+                            "§a[LinearReader] Graph recording complete — ")
+                            .append(outputPaths.size()).append(" file(s):\n");
+                    for (Path p : outputPaths) {
+                        msg.append("§7  ").append(p.toAbsolutePath()).append('\n');
+                    }
+                    final String m = msg.toString().stripTrailing();
+                    source.sendSuccess(() -> Component.literal(m), false);
+                });
+
+        if (!started) {
+            source.sendFailure(Component.literal(
+                    "[LinearReader] A graph recording is already running. "
+                            + "Use §f/linearreader graph stop§c to stop it first."));
+            return 0;
+        }
+
+        String statKeys = finalStats.stream().map(GraphStat::getKey)
+                .collect(Collectors.joining(", "));
+        String durationDesc = finalDuration < 0 ? "until stopped" : finalDuration + "s";
+        source.sendSuccess(() -> Component.literal(
+                "§6[LinearReader] Graph recording started.\n"
+                        + "§7  Stats: §f" + statKeys + "\n"
+                        + "§7  Interval: §f" + finalInterval + "s  "
+                        + "§7Duration: §f" + durationDesc
+                        + (finalSingle ? "  §7Mode: §fsingle SVG" : "  §7Mode: §fmultiple SVGs") + "\n"
+                        + "§8  Warming up for " + GraphSampler.WARMUP_SECONDS + "s before first sample."), false);
+        return 1;
+    }
+
+    private static int executeGraphStop(CommandContext<CommandSourceStack> ctx) {
+        if (!GraphSampler.isRunning()) {
+            ctx.getSource().sendFailure(Component.literal(
+                    "[LinearReader] No graph recording is currently running."));
+            return 0;
+        }
+        GraphSampler.stop();
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "§e[LinearReader] Graph stop requested — rendering collected samples now."), false);
+        return 1;
+    }
+
+    private static int executeGraphStatus(CommandContext<CommandSourceStack> ctx) {
+        if (!GraphSampler.isRunning()) {
+            List<java.nio.file.Path> last = GraphSampler.getLastOutputPaths();
+            String lastRun = last.isEmpty()
+                    ? "§8(no completed recordings this session)"
+                    : "§7  Last output: §f" + last.get(0).getParent();
+            String lastErr = GraphSampler.lastError().isEmpty()
+                    ? ""
+                    : "\n§c  Last error: " + GraphSampler.lastError();
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "§7[LinearReader] No graph recording is running.\n"
+                            + lastRun + lastErr), false);
+            return 0;
+        }
+
+        // Running — show warmup or recording state.
+        if (GraphSampler.isWarmingUp()) {
+            double warmupRemaining = GraphSampler.warmupRemainingSeconds();
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "§e[LinearReader] Graph recording: warming up — "
+                            + String.format("%.0fs", warmupRemaining)
+                            + "s until first sample.\n"
+                            + "§7  Stats: §f"
+                            + GraphSampler.getActiveStats().stream()
+                            .map(GraphStat::getKey)
+                            .collect(Collectors.joining(", "))), false);
+            return 1;
+        }
+
+        Set<GraphStat> active = GraphSampler.getActiveStats();
+        int collected = GraphSampler.samplesCollected();
+        double elapsed = GraphSampler.elapsedSeconds();
+        int duration = GraphSampler.getDurationSeconds();
+        int interval = GraphSampler.getIntervalSeconds();
+
+        String remainingStr = duration < 0
+                ? "until-stopped"
+                : String.format("%.0fs remaining", Math.max(0, duration - elapsed));
+
+        String statKeys = active.stream()
+                .map(GraphStat::getKey)
+                .collect(Collectors.joining(", "));
+
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "§6[LinearReader] Graph recording in progress.\n"
+                        + "§7  Stats: §f" + statKeys + "\n"
+                        + "§7  Samples: §f" + collected
+                        + "  §7Elapsed: §f" + String.format("%.0fs", elapsed)
+                        + "  §7Interval: §f" + interval + "s\n"
+                        + "§7  " + remainingStr), false);
+        return 1;
+    }
+
+    /**
+     * Suggestion provider for the greedy {@code args} argument.
+     *
+     * Positional slot awareness:
+     * <ul>
+     *   <li>Slot 0 — duration: suggests common durations and {@code until-stopped}.</li>
+     *   <li>Slot 1 — interval: suggests common intervals.</li>
+     *   <li>Slot 2 — render mode: suggests {@code single-graph} and
+     *       {@code multiple-graphs} exclusively (no stat keys).</li>
+     *   <li>Slot 3+ — stat keys: suggests remaining {@link GraphStat} keys,
+     *       filtering out ones already typed.</li>
+     * </ul>
+     */
+    private static CompletableFuture<Suggestions> suggestGraphArgs(
+            CommandContext<CommandSourceStack> ctx, SuggestionsBuilder builder) {
+
+        String remaining = builder.getRemaining();
+        String[] parts = remaining.split(" ", -1);
+        int committed = parts.length - 1;
+        String current = parts[parts.length - 1];
+
+        int currentTokenStart = builder.getStart() + remaining.length() - current.length();
+        SuggestionsBuilder sub = builder.createOffset(currentTokenStart);
+
+        // Determine how many positional slots have been filled.
+        boolean hasDuration = committed >= 1;
+        boolean hasInterval = committed >= 2;
+        boolean hasMode     = committed >= 3;
+        // Stat keys start at committed token index 3.
+        Set<String> usedStatKeys = new java.util.HashSet<>();
+        for (int i = 3; i < committed; i++) {
+            usedStatKeys.add(parts[i]);
+        }
+
+        if (!hasDuration) {
+            // Slot 0: duration.
+            Stream.of("30", "60", "120", "300", "600", "until-stopped")
+                    .filter(s -> s.startsWith(current))
+                    .forEach(sub::suggest);
+            return sub.buildFuture();
+        }
+
+        if (!hasInterval) {
+            // Slot 1: interval.
+            Stream.of("1", "5", "10", "30", "60")
+                    .filter(s -> s.startsWith(current))
+                    .forEach(sub::suggest);
+            return sub.buildFuture();
+        }
+
+        if (!hasMode) {
+            // Slot 2: render mode only — no stat keys yet.
+            Stream.of("single-graph", "multiple-graphs")
+                    .filter(s -> s.startsWith(current))
+                    .forEach(sub::suggest);
+            return sub.buildFuture();
+        }
+
+        // Slot 3+: stat keys only.
+        for (GraphStat stat : GraphStat.values()) {
+            String key = stat.getKey();
+            if (!usedStatKeys.contains(key) && key.startsWith(current)) {
+                sub.suggest(key, net.minecraft.network.chat.Component.literal(stat.getLabel()));
+            }
+        }
+        return sub.buildFuture();
     }
 
     // ---------------------------------------------------------------------------
