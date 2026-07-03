@@ -455,7 +455,7 @@ public final class IdleRecompressor {
             return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
         }
 
-        int compBodyLen = encoded.compressedBody.length;
+        int compBodyLen = encoded.compressedBodyLength;
         if (compBodyLen <= 0) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
         // Decompress.

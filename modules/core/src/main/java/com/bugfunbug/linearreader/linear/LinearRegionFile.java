@@ -70,6 +70,18 @@ public class LinearRegionFile {
     private static final ThreadLocal<byte[][]> TL_FLUSH_BUFS =
             ThreadLocal.withInitial(() -> new byte[2][]);
 
+    // Reusable byte-array buffer per read thread for the *compressed* body read from disk.
+    // Safe to pool because it is only ever used as decompression input and is never
+    // retained after decompress() returns — true for every current caller (resident
+    // region load, verifyOnDisk, and IdleRecompressor recompression).
+    //
+    // The DECOMPRESSED output is deliberately NOT pooled here: on the resident-load path
+    // it becomes `loadedBody` and is retained for the region's entire cache lifetime, so a
+    // shared thread-local buffer would let a later unrelated read on the same thread
+    // silently overwrite an already-cached region's chunk data.
+    private static final ThreadLocal<byte[][]> TL_READ_BUFS =
+            ThreadLocal.withInitial(() -> new byte[1][]);
+
     // Throttle the disk-space syscall to at most once per minute per flush thread.
     private static final ThreadLocal<Long> TL_LAST_DISK_CHECK =
             ThreadLocal.withInitial(() -> 0L);
@@ -1127,14 +1139,19 @@ public class LinearRegionFile {
         if (compressedBodyLengthLong <= 0L || compressedBodyLengthLong > Integer.MAX_VALUE) {
             throw new IOException("[LinearReader] Invalid compressed body length in: " + src);
         }
+        int compressedBodyLength = (int) compressedBodyLengthLong;
 
         byte[] header = new byte[32];
-        byte[] compressedBody = new byte[(int) compressedBodyLengthLong];
+        byte[][] readBufs = TL_READ_BUFS.get();
+        if (readBufs[0] == null || readBufs[0].length < compressedBodyLength) {
+            readBufs[0] = new byte[compressedBodyLength];
+        }
+        byte[] compressedBody = readBufs[0];
         byte[] footer = new byte[8];
 
         try (FileChannel channel = FileChannel.open(src, StandardOpenOption.READ)) {
             readFully(channel, ByteBuffer.wrap(header), src, "header");
-            readFully(channel, ByteBuffer.wrap(compressedBody), src, "compressed body");
+            readFully(channel, ByteBuffer.wrap(compressedBody, 0, compressedBodyLength), src, "compressed body");
             readFully(channel, ByteBuffer.wrap(footer), src, "footer");
         }
 
@@ -1146,7 +1163,8 @@ public class LinearRegionFile {
                 header[17],
                 readShortBigEndian(header, 18),
                 readLongBigEndian(header, 24),
-                compressedBody
+                compressedBody,
+                compressedBodyLength
         );
     }
 
@@ -1283,7 +1301,7 @@ public class LinearRegionFile {
         if (storedCRC != 0L) {
             CRC32 crc = TL_CRC32.get();
             crc.reset();
-            crc.update(encoded.compressedBody, 0, encoded.compressedBody.length);
+            crc.update(encoded.compressedBody, 0, encoded.compressedBodyLength);
             if (crc.getValue() != storedCRC) {
                 throw new IOException("[LinearReader] CRC32 checksum mismatch in: " + src
                         + " (expected " + storedCRC + ", got " + crc.getValue() + ")");
@@ -1295,7 +1313,7 @@ public class LinearRegionFile {
     private static DecompressedBody decompressEncodedLinearFile(Path src, EncodedLinearFile encoded) throws IOException {
         long decompressStartNs = System.nanoTime();
         long expectedDecompSize = ZstdSupport.decompressedSize(
-                encoded.compressedBody, 0, encoded.compressedBody.length);
+                encoded.compressedBody, 0, encoded.compressedBodyLength);
         if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE) {
             throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
         }
@@ -1303,7 +1321,7 @@ public class LinearRegionFile {
         byte[] decompressed = new byte[(int) expectedDecompSize];
         long result = ZstdSupport.decompress(
                 decompressed, 0, decompressed.length,
-                encoded.compressedBody, 0, encoded.compressedBody.length);
+                encoded.compressedBody, 0, encoded.compressedBodyLength);
         if (ZstdSupport.isError(result)) {
             throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
         }
@@ -1322,10 +1340,11 @@ public class LinearRegionFile {
         final short chunkCount;
         final long storedCRC;
         final byte[] compressedBody;
+        final int compressedBodyLength;
 
         EncodedLinearFile(long headerSignature, long footerSignature, byte version,
                           long newestTimestamp, byte compressionLevel, short chunkCount,
-                          long storedCRC, byte[] compressedBody) {
+                          long storedCRC, byte[] compressedBody, int compressedBodyLength) {
             this.headerSignature = headerSignature;
             this.footerSignature = footerSignature;
             this.version = version;
@@ -1334,6 +1353,7 @@ public class LinearRegionFile {
             this.chunkCount = chunkCount;
             this.storedCRC = storedCRC;
             this.compressedBody = compressedBody;
+            this.compressedBodyLength = compressedBodyLength;
         }
     }
 
