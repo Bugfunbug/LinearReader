@@ -66,6 +66,7 @@ configurations {
 
 repositories {
     mavenCentral()
+    maven { url = "https://maven.terraformersmc.com/" }
 }
 
 dependencies {
@@ -73,6 +74,7 @@ dependencies {
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricVersion}"
+    modImplementation "com.terraformersmc:modmenu:${project.modmenu_version}"
     compileOnly 'org.jetbrains:annotations:24.0.1'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
 

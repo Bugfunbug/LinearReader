@@ -72,12 +72,14 @@ configurations {
 
 repositories {
     mavenCentral()
+    maven { url = "https://maven.terraformersmc.com/" }
 }
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraftVersion}"
     implementation "net.fabricmc:fabric-loader:${loaderVersion}"
     implementation "net.fabricmc.fabric-api:fabric-api:${fabricVersion}"
+    implementation "com.terraformersmc:modmenu:${project.modmenu_version}"
     compileOnly 'org.jetbrains:annotations:24.0.1'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
