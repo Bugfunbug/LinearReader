@@ -23,7 +23,7 @@ public final class Minecraft1202To1214WorldPathResolver implements WorldPathReso
 
     @Override
     public Path resolveWorldRoot(MinecraftServer server) {
-        return server.getWorldPath(LevelResource.ROOT);
+        return server.getWorldPath(LevelResource.ROOT).toAbsolutePath().normalize();
     }
 
     @Override
