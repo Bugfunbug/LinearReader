@@ -103,13 +103,18 @@ public abstract class RegionFileStorageMixin {
             cir.setReturnValue(null);
             return;
         }
+        boolean statsEnabled = LinearStats.isEnabled();
         try (DataInputStream dis = region.read(pos)) {
             if (dis == null) {
                 cir.setReturnValue(null);
                 return;
             }
+            long t = statsEnabled ? System.nanoTime() : 0L;
             // Explicitly cast to DataInput to comply with 1.21.9+ compiled method signature rules
             CompoundTag tag = NbtIo.read((DataInput) dis, NbtAccounter.unlimitedHeap());
+            if (statsEnabled) {
+                LinearStats.recordChunkDeserialize(System.nanoTime() - t);
+            }
             cir.setReturnValue(tag);
         } catch (IOException e) {
             LinearRuntime.LOGGER.error("[LinearReader] Failed to read chunk {}: {}", pos, e.getMessage(), e);

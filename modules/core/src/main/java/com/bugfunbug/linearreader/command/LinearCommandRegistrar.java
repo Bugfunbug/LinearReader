@@ -406,6 +406,10 @@ public final class LinearCommandRegistrar {
                 + "  avg §f" + String.format("%.3f", LinearStats.avgMs(s.chunkReadNs.sum(), cReads))   + "ms"
                 + "  min §f" + String.format("%.3f", LinearStats.toMs(s.minChunkReadNs.get()))          + "ms"
                 + "  max §f" + String.format("%.3f", LinearStats.toMs(s.maxChunkReadNs.get()))          + "ms\n"
+                + "§7  Deserialize: §f" + s.chunkDeserializes.sum()
+                + "  avg §f" + String.format("%.3f", LinearStats.avgMs(s.chunkDeserializeNs.sum(), s.chunkDeserializes.sum())) + "ms"
+                + "  min §f" + String.format("%.3f", LinearStats.toMs(s.minChunkDeserializeNs.get())) + "ms"
+                + "  max §f" + String.format("%.3f", LinearStats.toMs(s.maxChunkDeserializeNs.get())) + "ms\n"
                 + "§7  Writes : §f" + cWrites
                 + "§7  (" + String.format("%.1f", wrtTps) + "/s)"
                 + "  avg §f" + String.format("%.3f", LinearStats.avgMs(s.chunkWriteNs.sum(), cWrites)) + "ms"

@@ -107,7 +107,13 @@ public abstract class RegionFileStorageMixin {
         if (region == null) return null;
         try (DataInputStream dis = region.read(pos)) {
             if (dis == null) return null;
-            return NbtIo.read(dis);
+            boolean statsEnabled = LinearStats.isEnabled();
+            long t = statsEnabled ? System.nanoTime() : 0L;
+            CompoundTag tag = NbtIo.read(dis);
+            if (statsEnabled) {
+                LinearStats.recordChunkDeserialize(System.nanoTime() - t);
+            }
+            return tag;
         } catch (IOException e) {
             LinearRuntime.LOGGER.error("[LinearReader] Failed to read chunk {}: {}",
                     pos, e.getMessage(), e);

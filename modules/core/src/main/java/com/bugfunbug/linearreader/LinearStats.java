@@ -28,6 +28,14 @@ public final class LinearStats {
     public final AtomicLong minChunkReadNs  = new AtomicLong(Long.MAX_VALUE);
     public final AtomicLong maxChunkReadNs  = new AtomicLong(0);
 
+    // End-to-end chunk deserialize (NbtIo.read), separate from the
+    // in-memory byte-array wrap timed above. This is what actually reflects
+    // perceived chunk-read latency from the caller's perspective.
+    public final LongAdder  chunkDeserializes      = new LongAdder();
+    public final LongAdder  chunkDeserializeNs     = new LongAdder();
+    public final AtomicLong minChunkDeserializeNs  = new AtomicLong(Long.MAX_VALUE);
+    public final AtomicLong maxChunkDeserializeNs  = new AtomicLong(0);
+
     public final LongAdder  chunkWrites     = new LongAdder();
     public final LongAdder  chunkWriteNs    = new LongAdder();
     public final AtomicLong minChunkWriteNs = new AtomicLong(Long.MAX_VALUE);
@@ -89,6 +97,15 @@ public final class LinearStats {
         s.chunkReadNs.add(elapsedNs);
         updateMin(s.minChunkReadNs, elapsedNs);
         updateMax(s.maxChunkReadNs, elapsedNs);
+    }
+
+    public static void recordChunkDeserialize(long elapsedNs) {
+        if (!enabled) return;
+        LinearStats s = INSTANCE;
+        s.chunkDeserializes.increment();
+        s.chunkDeserializeNs.add(elapsedNs);
+        updateMin(s.minChunkDeserializeNs, elapsedNs);
+        updateMax(s.maxChunkDeserializeNs, elapsedNs);
     }
 
     public static void recordChunkWrite(long elapsedNs) {
@@ -162,6 +179,9 @@ public final class LinearStats {
         LinearStats s = INSTANCE;
         s.chunkReads.reset();     s.chunkReadNs.reset();
         s.minChunkReadNs.set(Long.MAX_VALUE); s.maxChunkReadNs.set(0);
+
+        s.chunkDeserializes.reset();  s.chunkDeserializeNs.reset();
+        s.minChunkDeserializeNs.set(Long.MAX_VALUE); s.maxChunkDeserializeNs.set(0);
 
         s.chunkWrites.reset();    s.chunkWriteNs.reset();
         s.minChunkWriteNs.set(Long.MAX_VALUE); s.maxChunkWriteNs.set(0);
