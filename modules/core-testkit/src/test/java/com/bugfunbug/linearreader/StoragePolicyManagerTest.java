@@ -128,6 +128,28 @@ class StoragePolicyManagerTest {
     }
 
     @Test
+    void rateLimitsPanicFlushAttempts() {
+        long startNs = 1_000_000_000L;
+
+        StoragePolicyManager.reset(true);
+        StoragePolicyManager.setTestNowNs(startNs);
+        StoragePolicyManager.onServerTick(0, 0);
+
+        // First attempt at any time is always allowed.
+        assertTrue(StoragePolicyManager.shouldAttemptPanicFlush(startNs));
+
+        // Immediately after, still within the 250ms window - blocked.
+        assertFalse(StoragePolicyManager.shouldAttemptPanicFlush(startNs + 100_000_000L));
+        assertFalse(StoragePolicyManager.shouldAttemptPanicFlush(startNs + 249_000_000L));
+
+        // Once the window has elapsed, eligible again.
+        assertTrue(StoragePolicyManager.shouldAttemptPanicFlush(startNs + 250_000_000L));
+
+        // And it immediately re-blocks after that success.
+        assertFalse(StoragePolicyManager.shouldAttemptPanicFlush(startNs + 300_000_000L));
+    }
+
+    @Test
     void tracksAndRepaysMaintenanceDebtForLowCompressionRegions() {
         StoragePolicyManager.reset(true);
 

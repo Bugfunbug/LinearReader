@@ -337,6 +337,52 @@ public final class LinearRuntime {
         });
     }
 
+    /**
+     * Emergency backstop for RegionFileStorageMixin's linearGetOrCreate when the
+     * cache is full and every entry is dirty/flushing (nothing evictable).
+     *
+     * Deliberately does NOT remove the region from the caller's cache, from
+     * ALL_OPEN, or call releaseChunkData() - all of those are only safe once a
+     * region has genuinely been retired. Doing that here, while the region may
+     * still be touched again before this flush finishes, would risk a second
+     * LinearRegionFile instance being created for the same file path, and the
+     * two racing on the same disk write. Instead this just prioritizes flushing
+     * the worst-offending dirty region so it becomes clean - and therefore
+     * evictable/resident-trimmable through the existing, already-safe paths -
+     * on a subsequent pass. Rate-limited so a sustained cache-full condition
+     * can't spam the flush executor.
+     */
+    public static void maybePanicFlush(Iterable<LinearRegionFile> candidates) {
+        LinearRuntime instance = INSTANCE;
+        if (instance == null || instance.flushExecutor == null || instance.flushExecutor.isShutdown()) return;
+
+        long nowNs = System.nanoTime();
+        if (!StoragePolicyManager.shouldAttemptPanicFlush(nowNs)) return;
+
+        LinearRegionFile worst = null;
+        double worstPriority = Double.NEGATIVE_INFINITY;
+        for (LinearRegionFile candidate : candidates) {
+            if (!candidate.isDirty() || candidate.isFlushing()) continue;
+            double priority = StoragePolicyManager.pressureFlushPriority(candidate, nowNs);
+            if (priority > worstPriority) {
+                worstPriority = priority;
+                worst = candidate;
+            }
+        }
+        if (worst == null) return;
+
+        final LinearRegionFile toFlush = worst;
+        instance.flushExecutor.submit(() -> {
+            try {
+                toFlush.flush(true);
+            } catch (IOException e) {
+                LOGGER.warn("[LinearReader] Panic flush failed for {}: {}", toFlush, e.getMessage());
+            }
+        });
+        LOGGER.warn("[LinearReader] Region cache is full with no clean candidates - "
+                + "priority-flushing {} to relieve memory pressure.", toFlush);
+    }
+
     public static void queueDirtyRegionsForSave() {
         LinearRuntime instance = INSTANCE;
         if (instance == null
@@ -443,13 +489,22 @@ public final class LinearRuntime {
             long nowNs = System.nanoTime();
             if (backgroundFlushesAllowed(nowNs)) {
                 List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
+                List<LinearRegionFile> trickleCandidates = new ArrayList<>();
+                int dirtyCount = 0;
                 for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+                    if (region.isDirty()) {
+                        dirtyCount++;
+                    }
                     if (StoragePolicyManager.shouldQueueBackgroundFlush(region, nowNs)) {
                         queueRegion(region);
                         continue;
                     }
                     if (StoragePolicyManager.shouldConsiderPressureFlush(region, nowNs)) {
                         dirtyCandidates.add(region);
+                        continue;
+                    }
+                    if (!dedicatedServer && region.isDirty() && !region.isFlushing()) {
+                        trickleCandidates.add(region);
                     }
                 }
 
@@ -466,6 +521,24 @@ public final class LinearRuntime {
                     int toQueue = dirtyCandidates.size() - dirtyLimit;
                     for (int i = 0; i < toQueue; i++) {
                         queueRegion(dirtyCandidates.get(i));
+                    }
+                }
+
+                if (!trickleCandidates.isEmpty()) {
+                    LinearRegionFile best = null;
+                    double bestPriority = Double.NEGATIVE_INFINITY;
+                    for (LinearRegionFile candidate : trickleCandidates) {
+                        if (!StoragePolicyManager.shouldTrickleFlushSingleplayer(candidate, nowNs, dirtyCount)) {
+                            continue;
+                        }
+                        double priority = StoragePolicyManager.pressureFlushPriority(candidate, nowNs);
+                        if (priority > bestPriority) {
+                            bestPriority = priority;
+                            best = candidate;
+                        }
+                    }
+                    if (best != null && queueRegion(best)) {
+                        StoragePolicyManager.noteTrickleFlush(nowNs);
                     }
                 }
             }

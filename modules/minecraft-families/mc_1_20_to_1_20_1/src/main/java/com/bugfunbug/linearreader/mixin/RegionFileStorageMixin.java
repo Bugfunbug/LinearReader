@@ -94,6 +94,11 @@ public abstract class RegionFileStorageMixin {
                     staleWrapper.close();
                 }
                 LinearRuntime.submitFlush(evicted);
+            } else {
+                // Cache is full and every entry is dirty/flushing right now - nothing
+                // can be safely evicted. Priority-flush the worst offender instead of
+                // silently growing past the configured cap.
+                LinearRuntime.maybePanicFlush(linearCache.values());
             }
         }
 

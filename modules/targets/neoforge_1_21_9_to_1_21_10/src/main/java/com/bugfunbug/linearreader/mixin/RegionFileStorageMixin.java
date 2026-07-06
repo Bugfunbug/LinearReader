@@ -10,6 +10,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.storage.RegionFile;
 import net.minecraft.world.level.chunk.storage.RegionFileStorage;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -36,6 +37,9 @@ public abstract class RegionFileStorageMixin {
 
     @Shadow @Final
     private boolean sync;
+
+    @Shadow @Final
+    private Long2ObjectLinkedOpenHashMap<RegionFile> regionCache;
 
     @Unique
     private Long2ObjectLinkedOpenHashMap<LinearRegionFile> linearCache;
@@ -79,7 +83,16 @@ public abstract class RegionFileStorageMixin {
             }
             if (evictKey != Long.MIN_VALUE) {
                 LinearRegionFile evicted = linearCache.remove(evictKey);
+                RegionFile staleWrapper = regionCache.remove(evictKey);
+                if (staleWrapper != null) {
+                    staleWrapper.close();
+                }
                 LinearRuntime.submitFlush(evicted);
+            } else {
+                // Cache is full and every entry is dirty/flushing right now - nothing
+                // can be safely evicted. Priority-flush the worst offender instead of
+                // silently growing past the configured cap.
+                LinearRuntime.maybePanicFlush(linearCache.values());
             }
         }
 

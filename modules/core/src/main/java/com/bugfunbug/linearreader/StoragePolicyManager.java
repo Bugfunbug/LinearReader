@@ -33,6 +33,14 @@ public final class StoragePolicyManager {
     private static final long BACKGROUND_FLUSH_DELAY_NS = 15_000_000_000L;
     private static final long PRESSURE_FLUSH_MIN_AGE_NS = 3_000_000_000L;
     private static final long FLUSH_COOLDOWN_NS = 15_000_000_000L;
+    private static final long TRICKLE_FLUSH_MIN_QUIET_NS = 60_000_000_000L;   // 60s since last write
+    private static final long TRICKLE_FLUSH_BASE_INTERVAL_NS = 8_000_000_000L; // interval at low backlog
+    private static final long TRICKLE_FLUSH_FLOOR_INTERVAL_NS = 1_000_000_000L; // fastest we'll ever go
+    private static final int  TRICKLE_FLUSH_BACKLOG_SCALE = 40;                // dirty-region count to reach the floor
+    private static final double TRICKLE_FLUSH_MAX_TICK_STRAIN = 0.35D;
+
+    private static final long PANIC_FLUSH_MIN_INTERVAL_NS = 250_000_000L; // at most ~4/sec, global
+
     private static final long RESIDENT_TRIM_RECENT_ACCESS_NS = 45_000_000_000L;
     private static final long RESIDENT_TRIM_MIN_INTERVAL_NS = 2_000_000_000L;
     private static final long RESIDENT_BUDGET_BYTES = computeResidentBudgetBytes();
@@ -68,6 +76,8 @@ public final class StoragePolicyManager {
     private static final LongAdder RESIDENT_TRIMMED_BYTES = new LongAdder();
     private static final AtomicLong LAST_CHUNK_IO_NS = new AtomicLong(System.nanoTime());
     private static final AtomicLong LAST_RESIDENT_TRIM_NS = new AtomicLong(0L);
+    private static final AtomicLong LAST_TRICKLE_FLUSH_NS = new AtomicLong(0L);
+    private static final AtomicLong LAST_PANIC_FLUSH_NS = new AtomicLong(0L);
     private static final Map<Path, RegionActivity> REGION_ACTIVITY = new ConcurrentHashMap<>();
 
     private static volatile PolicySnapshot snapshot = new PolicySnapshot(
@@ -163,6 +173,9 @@ public final class StoragePolicyManager {
         RESIDENT_TRIMMED_BYTES.reset();
         LAST_CHUNK_IO_NS.set(nowNs());
         LAST_RESIDENT_TRIM_NS.set(0L);
+        LAST_RESIDENT_TRIM_NS.set(0L);
+        LAST_TRICKLE_FLUSH_NS.set(0L);
+        LAST_PANIC_FLUSH_NS.set(0L);
         REGION_ACTIVITY.clear();
 
         lastTickNs = 0L;
@@ -481,6 +494,54 @@ public final class StoragePolicyManager {
     public static boolean shouldConsiderPressureFlush(LinearRegionFile region, long nowNs) {
         return shouldConsiderPressureFlush(region.isDirty(), region.isFlushing(),
                 region.lastMutationTimeNs(), region.lastSuccessfulFlushTimeNs(), nowNs);
+    }
+
+    /**
+     * Interval between trickle flushes, scaled down as dirty-region backlog grows.
+     * At <=1 dirty region: base interval (8s). At >=TRICKLE_FLUSH_BACKLOG_SCALE dirty
+     * regions: the floor (1s). Linear in between. This exists because a fixed interval
+     * can't keep up with sustained high-velocity chunk generation (e.g. elytra flight
+     * generating dirty regions far faster than a flat 1-per-8s rate can drain) - but we
+     * still never want to go faster than the floor, since this runs on the same JVM as
+     * the render thread on integrated servers.
+     */
+    private static long trickleFlushIntervalNs(int dirtyRegionCount) {
+        if (dirtyRegionCount <= 1) return TRICKLE_FLUSH_BASE_INTERVAL_NS;
+        double fraction = clamp(dirtyRegionCount / (double) TRICKLE_FLUSH_BACKLOG_SCALE, 0.0D, 1.0D);
+        long span = TRICKLE_FLUSH_BASE_INTERVAL_NS - TRICKLE_FLUSH_FLOOR_INTERVAL_NS;
+        return TRICKLE_FLUSH_BASE_INTERVAL_NS - Math.round(span * fraction);
+    }
+
+    static boolean shouldTrickleFlushSingleplayer(boolean dirty, boolean flushing,
+                                                  long lastMutationNs, long nowNs,
+                                                  int dirtyRegionCount) {
+        if (dedicatedServer) return false;
+        if (!dirty || flushing) return false;
+        if (nowNs - lastMutationNs < TRICKLE_FLUSH_MIN_QUIET_NS) return false;
+        if (snapshot.tickStrain() > TRICKLE_FLUSH_MAX_TICK_STRAIN) return false;
+        return nowNs - LAST_TRICKLE_FLUSH_NS.get() >= trickleFlushIntervalNs(dirtyRegionCount);
+    }
+
+    public static boolean shouldTrickleFlushSingleplayer(LinearRegionFile region, long nowNs, int dirtyRegionCount) {
+        return shouldTrickleFlushSingleplayer(region.isDirty(), region.isFlushing(),
+                region.lastMutationTimeNs(), nowNs, dirtyRegionCount);
+    }
+
+    /** Advances the trickle-flush rate limit. Call only after actually queuing a region. */
+    public static void noteTrickleFlush(long nowNs) {
+        LAST_TRICKLE_FLUSH_NS.set(nowNs);
+    }
+
+    /**
+     * Rate limiter for the panic-flush backstop (see LinearRuntime.maybePanicFlush).
+     * Uses compareAndSet so concurrent callers across different dimension storages
+     * (each RegionFileStorage has its own linearCache/lock) can't both win the same
+     * rate-limit window.
+     */
+    public static boolean shouldAttemptPanicFlush(long nowNs) {
+        long last = LAST_PANIC_FLUSH_NS.get();
+        if (nowNs - last < PANIC_FLUSH_MIN_INTERVAL_NS) return false;
+        return LAST_PANIC_FLUSH_NS.compareAndSet(last, nowNs);
     }
 
     public static double pressureFlushPriority(LinearRegionFile region, long nowNs) {
