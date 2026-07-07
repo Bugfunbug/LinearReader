@@ -162,6 +162,7 @@ public final class IdleRecompressor {
         Thread detector = DETECTOR;
         if (detector != null) detector.interrupt();
         interruptWorker();
+        KNOWN_FOLDERS.clear();
     }
 
     public static boolean isRunning()         { return RUNNING.get(); }
