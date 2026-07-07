@@ -10,7 +10,10 @@
   "environment": "*",
   "entrypoints": {
     "main": ["com.bugfunbug.linearreader.LinearReader"],
-    "client": ["com.bugfunbug.linearreader.LinearReader"]
+    "client": ["com.bugfunbug.linearreader.LinearReader"],
+    "modmenu": [
+      "com.bugfunbug.linearreader.config.ModMenuSupport"
+    ]
   },
   "mixins": ["linearreader.mixins.json"],
   "depends": {
@@ -22,10 +25,5 @@
   "contact": {
     "homepage": "https://modrinth.com/mod/linearreader",
     "issues": "https://github.com/Bugfunbug/LinearReader/issues"
-  },
-  "entrypoints": {
-    "modmenu": [
-      "com.bugfunbug.linearreader.config.ModMenuSupport"
-    ]
   }
 }
