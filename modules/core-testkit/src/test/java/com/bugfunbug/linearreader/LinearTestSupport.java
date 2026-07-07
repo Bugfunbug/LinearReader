@@ -47,7 +47,8 @@ public final class LinearTestSupport {
                 1,
                 true,
                 20,
-                15
+                15,
+                true
         );
 
         for (LinearRegionFile region : List.copyOf(LinearRegionFile.ALL_OPEN)) {

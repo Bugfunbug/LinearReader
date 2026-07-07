@@ -5,6 +5,7 @@ import com.bugfunbug.linearreader.linear.DHPregenMonitor;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.bugfunbug.linearreader.linear.MCAConverter;
+import com.bugfunbug.linearreader.linear.BulkMcaConverter;
 import com.bugfunbug.linearreader.linear.ZstdSupport;
 import com.bugfunbug.linearreader.minecraftapi.ChunkNbtAdapter;
 import com.bugfunbug.linearreader.minecraftapi.MinecraftFamily;
@@ -403,6 +404,11 @@ public final class LinearRuntime {
         migrateLegacyBackups();
         loadPins();
         recoverStartupTempFiles();
+        if (LinearConfig.isBulkConvertOnLoad()) {
+            BulkMcaConverter.convertAll(worldRoot);
+        } else {
+            BulkMcaConverter.start(worldRoot);
+        }
     }
 
     public void onServerStopping() {

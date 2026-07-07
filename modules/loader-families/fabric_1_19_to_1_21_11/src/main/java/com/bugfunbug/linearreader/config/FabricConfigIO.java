@@ -112,6 +112,12 @@ public final class FabricConfigIO {
                 "Minimum available JVM heap headroom required during recompression.",
                 "If the worker drops below this percent it pauses for a few minutes",
                 "before trying again.");
+        addBool(lines, "bulkConvertOnLoad", config.bulkConvertOnLoad,
+                "If true, converts every legacy .mca file in the world to .linear",
+                "immediately on startup, before the world becomes joinable.",
+                "If false, conversion still happens automatically for the whole world,",
+                "but runs in the background after the server has finished starting,",
+                "so players can join immediately.");
 
         try {
             Files.createDirectories(path.getParent());
@@ -155,6 +161,7 @@ public final class FabricConfigIO {
                     case "autoRecompressEnabled" -> config.autoRecompressEnabled = parseBoolean(key, value, config.autoRecompressEnabled);
                     case "idleThresholdMinutes" -> config.idleThresholdMinutes = parseInt(key, value, config.idleThresholdMinutes);
                     case "recompressMinFreeRamPercent" -> config.recompressMinFreeRamPercent = parseInt(key, value, config.recompressMinFreeRamPercent);
+                    case "bulkConvertOnLoad" -> config.bulkConvertOnLoad = parseBoolean(key, value, config.bulkConvertOnLoad);
                     default -> {}
                 }
             }

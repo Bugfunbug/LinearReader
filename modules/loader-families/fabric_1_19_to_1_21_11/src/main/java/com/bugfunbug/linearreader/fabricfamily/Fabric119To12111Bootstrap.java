@@ -54,7 +54,8 @@ public final class Fabric119To12111Bootstrap implements LoaderBootstrap {
                 cfg.diskSpaceWarnGb,
                 cfg.autoRecompressEnabled,
                 cfg.idleThresholdMinutes,
-                cfg.recompressMinFreeRamPercent
+                cfg.recompressMinFreeRamPercent,
+                cfg.bulkConvertOnLoad
         );
     }
 }

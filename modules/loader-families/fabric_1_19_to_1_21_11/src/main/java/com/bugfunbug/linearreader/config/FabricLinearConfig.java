@@ -58,6 +58,14 @@ public class FabricLinearConfig {
     /** Minimum available JVM heap headroom required before recompression continues. */
     public int recompressMinFreeRamPercent = 15;
 
+    /**
+     * If true, converts every legacy .mca file in the world to .linear immediately
+     * on startup, before the world becomes joinable. If false, conversion still
+     * happens automatically for the whole world, but runs in the background after
+     * the server has finished starting.
+     */
+    public boolean bulkConvertOnLoad = true;
+
     public void validate() {
         compressionLevel     = clamp(compressionLevel,     1,  22);
         regionCacheSize      = clamp(regionCacheSize,      8,  1024);

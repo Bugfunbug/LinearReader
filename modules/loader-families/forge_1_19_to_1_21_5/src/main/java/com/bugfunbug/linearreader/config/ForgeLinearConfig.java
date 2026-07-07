@@ -31,6 +31,7 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.BooleanValue AUTO_RECOMPRESS_ENABLED;
     private static final ForgeConfigSpec.IntValue     IDLE_THRESHOLD_MINUTES;
     private static final ForgeConfigSpec.IntValue     RECOMPRESS_MIN_FREE_RAM_PERCENT;
+    private static final ForgeConfigSpec.BooleanValue BULK_CONVERT_ON_LOAD;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -167,6 +168,17 @@ public final class ForgeLinearConfig {
                 )
                 .defineInRange("recompressMinFreeRamPercent", 15, 5, 50);
 
+        BULK_CONVERT_ON_LOAD = builder
+                .comment(
+                        "If true, converts every legacy .mca file in the world to .linear",
+                        "immediately on startup, before the world becomes joinable.",
+                        "If false, conversion still happens automatically for the whole world,",
+                        "but runs in the background after the server has finished starting,",
+                        "so players can join immediately.",
+                        "Default = true"
+                )
+                .define("bulkConvertOnLoad", true);
+
         SPEC = builder.build();
     }
 
@@ -193,7 +205,8 @@ public final class ForgeLinearConfig {
                 DISK_SPACE_WARN_GB.get(),
                 AUTO_RECOMPRESS_ENABLED.get(),
                 IDLE_THRESHOLD_MINUTES.get(),
-                RECOMPRESS_MIN_FREE_RAM_PERCENT.get()
+                RECOMPRESS_MIN_FREE_RAM_PERCENT.get(),
+                BULK_CONVERT_ON_LOAD.get()
         );
     }
 }

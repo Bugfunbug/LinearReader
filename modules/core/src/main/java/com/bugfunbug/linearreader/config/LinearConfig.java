@@ -34,6 +34,7 @@ public final class LinearConfig {
     private static volatile boolean autoRecompressEnabled = true;
     private static volatile int     idleThresholdMinutes  = 20;
     private static volatile int     recompressMinFreeRamPercent = 15;
+    private static volatile boolean bulkConvertOnLoad = true;
 
     // -------------------------------------------------------------------------
     // Getters — called everywhere in mod logic
@@ -56,6 +57,8 @@ public final class LinearConfig {
     public static boolean isAutoRecompressEnabled() { return autoRecompressEnabled; }
     public static int     getIdleThresholdMinutes() { return idleThresholdMinutes; }
     public static int     getRecompressMinFreeRamPercent() { return recompressMinFreeRamPercent; }
+    public static boolean isBulkConvertOnLoad()     { return bulkConvertOnLoad; }
+
 
     // -------------------------------------------------------------------------
     // Called by loader-specific config to push current values in
@@ -77,7 +80,8 @@ public final class LinearConfig {
             int     diskSpaceWarnGb,
             boolean autoRecompressEnabled,
             int     idleThresholdMinutes,
-            int     recompressMinFreeRamPercent) {
+            int     recompressMinFreeRamPercent,
+            boolean bulkConvertOnLoad) {
 
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
@@ -96,5 +100,6 @@ public final class LinearConfig {
         LinearConfig.autoRecompressEnabled = autoRecompressEnabled;
         LinearConfig.idleThresholdMinutes  = idleThresholdMinutes;
         LinearConfig.recompressMinFreeRamPercent = recompressMinFreeRamPercent;
+        LinearConfig.bulkConvertOnLoad = bulkConvertOnLoad;
     }
 }
