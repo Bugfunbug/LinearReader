@@ -54,10 +54,10 @@ public final class MCAConverter {
                 : folderLabel + "/" + mcaPath.getFileName();
 
         long startNs = System.nanoTime();
-        LinearRuntime.LOGGER.info("[LinearReader] Converting legacy region {} to .linear.", fileLabel);
+        LinearRuntime.LOGGER.debug("[LinearReader] Converting legacy region {} to .linear.", fileLabel);
         convertOne(mcaPath);
         long ms = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
-        LinearRuntime.LOGGER.info("[LinearReader] Converted legacy region {} in {}ms.", fileLabel, ms);
+        LinearRuntime.LOGGER.debug("[LinearReader] Converted legacy region {} in {}ms.", fileLabel, ms);
     }
 
     private static void convertOne(Path mcaPath) throws IOException {

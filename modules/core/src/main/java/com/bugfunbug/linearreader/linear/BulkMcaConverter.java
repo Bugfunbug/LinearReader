@@ -40,6 +40,9 @@ public final class BulkMcaConverter {
     private static final AtomicInteger FILES_TOTAL = new AtomicInteger(0);
     private static final AtomicInteger FILES_FAILED = new AtomicInteger(0);
 
+    /** Minimum time between "still converting..." progress lines, so a huge world doesn't spam INFO logs. */
+    private static final long PROGRESS_LOG_MIN_INTERVAL_MS = 10_000L;
+
     public static boolean isRunning()  { return RUNNING.get(); }
     public static int     filesDone()  { return FILES_DONE.get(); }
     public static int     filesTotal() { return FILES_TOTAL.get(); }
@@ -138,6 +141,8 @@ public final class BulkMcaConverter {
                 FILES_DONE.incrementAndGet();
             }
 
+            maybeLogProgress(mcaFiles.size());
+
             try {
                 Thread.sleep(FILE_DELAY_MS);
             } catch (InterruptedException e) {
@@ -159,6 +164,19 @@ public final class BulkMcaConverter {
                             + "Failed files will still convert automatically the first time they're loaded.",
                     done - failed, failed);
         }
+    }
+
+    private static volatile long lastProgressLogMs = 0L;
+
+    private static void maybeLogProgress(int total) {
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastProgressLogMs < PROGRESS_LOG_MIN_INTERVAL_MS) {
+            return;
+        }
+        lastProgressLogMs = nowMs;
+        LinearRuntime.LOGGER.info(
+                "[LinearReader] Bulk .mca conversion progress: {}/{} file(s) done.",
+                FILES_DONE.get(), total);
     }
 
     private static int[] parseRegionCoords(String fileName) {
