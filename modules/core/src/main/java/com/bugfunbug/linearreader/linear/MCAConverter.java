@@ -48,12 +48,16 @@ public final class MCAConverter {
             return;
         }
 
+        String folderLabel = regionFolder.getFileName() != null ? regionFolder.getFileName().toString() : "";
+        String fileLabel = folderLabel.isEmpty()
+                ? mcaPath.getFileName().toString()
+                : folderLabel + "/" + mcaPath.getFileName();
+
         long startNs = System.nanoTime();
-        LinearRuntime.LOGGER.info("[LinearReader] Converting legacy region {} to .linear.", mcaPath.getFileName());
+        LinearRuntime.LOGGER.info("[LinearReader] Converting legacy region {} to .linear.", fileLabel);
         convertOne(mcaPath);
         long ms = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
-        LinearRuntime.LOGGER.info("[LinearReader] Converted legacy region {} in {}ms.",
-                linearPath.getFileName(), ms);
+        LinearRuntime.LOGGER.info("[LinearReader] Converted legacy region {} in {}ms.", fileLabel, ms);
     }
 
     private static void convertOne(Path mcaPath) throws IOException {
