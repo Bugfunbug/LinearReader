@@ -89,6 +89,8 @@ public final class BulkMcaConverter {
     private static void doConvert(Path worldRoot) {
         if (worldRoot == null) return;
 
+        long startNs = System.nanoTime();
+
         FILES_DONE.set(0);
         FILES_TOTAL.set(0);
         FILES_FAILED.set(0);
@@ -155,15 +157,33 @@ public final class BulkMcaConverter {
 
         int done = FILES_DONE.get();
         int failed = FILES_FAILED.get();
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+        String elapsedLabel = formatElapsed(elapsedMs);
         if (failed == 0) {
             LinearRuntime.LOGGER.info(
-                    "[LinearReader] Bulk .mca conversion complete: {} file(s) converted.", done);
+                    "[LinearReader] Bulk .mca conversion complete: {} file(s) converted in {} ({}ms).",
+                    done, elapsedLabel, elapsedMs);
         } else {
             LinearRuntime.LOGGER.warn(
-                    "[LinearReader] Bulk .mca conversion complete: {} ok, {} failed. "
+                    "[LinearReader] Bulk .mca conversion complete: {} ok, {} failed in {} ({}ms). "
                             + "Failed files will still convert automatically the first time they're loaded.",
-                    done - failed, failed);
+                    done - failed, failed, elapsedLabel, elapsedMs);
         }
+    }
+
+    private static String formatElapsed(long millis) {
+        long safeMillis = Math.max(0L, millis);
+        long hours = safeMillis / 3_600_000L;
+        long minutes = (safeMillis % 3_600_000L) / 60_000L;
+        long seconds = (safeMillis % 60_000L) / 1_000L;
+        long ms = safeMillis % 1_000L;
+
+        StringBuilder sb = new StringBuilder();
+        if (hours > 0) sb.append(hours).append("h ");
+        if (hours > 0 || minutes > 0) sb.append(minutes).append("m ");
+        if (hours > 0 || minutes > 0 || seconds > 0) sb.append(seconds).append("s ");
+        sb.append(ms).append("ms");
+        return sb.toString();
     }
 
     private static volatile long lastProgressLogMs = 0L;
