@@ -253,8 +253,8 @@ public final class VoxyCompatAutoImporter {
         LinearRuntime.LOGGER.info(message);
         Minecraft minecraft = Minecraft.getInstance();
         minecraft.execute(() -> {
-            if (minecraft.gui != null) {
-                minecraft.gui.getChat().addClientSystemMessage(Component.literal(message));
+            if (minecraft.player != null) {
+                minecraft.player.displayClientMessage(Component.literal(message), false);
             }
         });
     }
