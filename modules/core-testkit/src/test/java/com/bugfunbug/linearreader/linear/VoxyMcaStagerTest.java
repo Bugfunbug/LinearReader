@@ -56,7 +56,12 @@ class VoxyMcaStagerTest {
                 Map.of(chunk, expected)
         );
 
-        Path existingMca = regionFolder.resolve("r.1.0.mca");
+        Path stagingDir = VoxyMcaStager.stagingDir(regionFolder);
+        Files.createDirectories(stagingDir);
+
+        // Place the pre-existing file directly in the staging directory
+        // so that the stager recognizes it as a conflict and correctly skips it.
+        Path existingMca = stagingDir.resolve("r.1.0.mca");
         byte[] existingBytes = new byte[]{1, 2, 3, 4};
         LinearTestData.writeRegion(
                 regionFolder.resolve("r.1.0.linear"),
@@ -67,26 +72,34 @@ class VoxyMcaStagerTest {
         assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder));
         waitForStaging();
 
-        Path stagedMca = regionFolder.resolve("r.0.0.mca");
+        Path stagedMca = stagingDir.resolve("r.0.0.mca");
         Path manifest = VoxyMcaStager.manifestPath(worldRoot);
+
         assertTrue(Files.exists(stagedMca));
         assertTrue(Files.exists(manifest));
         assertArrayEquals(existingBytes, Files.readAllBytes(existingMca));
-        assertTrue(Files.readString(manifest).contains("mca:region/r.0.0.mca"));
-        assertFalse(Files.readString(manifest).contains("mca:region/r.1.0.mca"));
 
-        try (RegionFile region = LinearRuntime.openVanillaRegionFile(stagedMca, regionFolder, false);
+        assertTrue(Files.readString(manifest).contains("mca:region/linearreader-voxy-staging/r.0.0.mca"));
+        assertFalse(Files.readString(manifest).contains("mca:region/linearreader-voxy-staging/r.1.0.mca"));
+
+        try (RegionFile region = LinearRuntime.openVanillaRegionFile(stagedMca, stagingDir, false);
              DataInputStream input = region.getChunkDataInputStream(chunk)) {
             assertNotNull(input);
             assertEquals(expected, NbtIo.read(input));
         }
+
+        // Release the file handle before attempting cleanup to prevent file locking failures
+        LinearTestSupport.resetState();
 
         VoxyMcaStager.CleanupResult cleanup = VoxyMcaStager.cleanup(worldRoot);
         assertEquals(1, cleanup.deleted());
         assertEquals(0, cleanup.failed());
         assertFalse(Files.exists(stagedMca));
         assertFalse(Files.exists(manifest));
-        assertArrayEquals(existingBytes, Files.readAllBytes(existingMca));
+
+        // Check that the new sweep logic correctly wiped the pre-existing file and the folder
+        assertFalse(Files.exists(existingMca));
+        assertFalse(Files.exists(stagingDir));
     }
 
     @Test
@@ -104,18 +117,21 @@ class VoxyMcaStagerTest {
 
         assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
         waitForStaging();
-        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
-        assertFalse(Files.exists(regionFolder.resolve("r.0.1.mca")));
-        assertTrue(Files.readString(VoxyMcaStager.manifestPath(worldRoot)).contains("mca:region/r.0.0.mca"));
+
+        Path stagingDir = VoxyMcaStager.stagingDir(regionFolder);
+        assertTrue(Files.exists(stagingDir.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(stagingDir.resolve("r.0.1.mca")));
+        assertTrue(Files.readString(VoxyMcaStager.manifestPath(worldRoot)).contains("mca:region/linearreader-voxy-staging/r.0.0.mca"));
 
         VoxyMcaStager.CleanupResult firstCleanup = VoxyMcaStager.cleanup(worldRoot);
         assertEquals(1, firstCleanup.deleted());
 
         assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
         waitForStaging();
-        assertFalse(Files.exists(regionFolder.resolve("r.0.0.mca")));
-        assertTrue(Files.exists(regionFolder.resolve("r.0.1.mca")));
-        assertTrue(Files.readString(VoxyMcaStager.manifestPath(worldRoot)).contains("mca:region/r.0.1.mca"));
+
+        assertFalse(Files.exists(stagingDir.resolve("r.0.0.mca")));
+        assertTrue(Files.exists(stagingDir.resolve("r.0.1.mca")));
+        assertTrue(Files.readString(VoxyMcaStager.manifestPath(worldRoot)).contains("mca:region/linearreader-voxy-staging/r.0.1.mca"));
         assertTrue(VoxyMcaStager.lastBatchComplete());
     }
 
@@ -134,16 +150,19 @@ class VoxyMcaStagerTest {
 
         assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
         waitForStaging();
-        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
+
+        Path stagingDir = VoxyMcaStager.stagingDir(regionFolder);
+        assertTrue(Files.exists(stagingDir.resolve("r.0.0.mca")));
 
         VoxyMcaStager.CleanupResult abort = VoxyMcaStager.abort(worldRoot);
         assertEquals(1, abort.deleted());
-        assertFalse(Files.exists(regionFolder.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(stagingDir.resolve("r.0.0.mca")));
 
         assertEquals(VoxyMcaStager.StartResult.STARTED, VoxyMcaStager.start(worldRoot, regionFolder, 1));
         waitForStaging();
-        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
-        assertFalse(Files.exists(regionFolder.resolve("r.0.1.mca")));
+
+        assertTrue(Files.exists(stagingDir.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(stagingDir.resolve("r.0.1.mca")));
     }
 
     @Test
@@ -161,10 +180,12 @@ class VoxyMcaStagerTest {
         waitForStaging();
 
         assertEquals(VoxyMcaStager.defaultBatchFiles(), VoxyMcaStager.filesTotal());
+
+        Path stagingDir = VoxyMcaStager.stagingDir(regionFolder);
         for (int z = 0; z < VoxyMcaStager.defaultBatchFiles(); z++) {
-            assertTrue(Files.exists(regionFolder.resolve("r.0." + z + ".mca")));
+            assertTrue(Files.exists(stagingDir.resolve("r.0." + z + ".mca")));
         }
-        assertFalse(Files.exists(regionFolder.resolve("r.0." + VoxyMcaStager.defaultBatchFiles() + ".mca")));
+        assertFalse(Files.exists(stagingDir.resolve("r.0." + VoxyMcaStager.defaultBatchFiles() + ".mca")));
     }
 
     @Test
@@ -187,8 +208,10 @@ class VoxyMcaStagerTest {
         waitForStaging();
 
         assertEquals(1, VoxyMcaStager.filesTotal());
-        assertTrue(Files.exists(regionFolder.resolve("r.0.0.mca")));
-        assertFalse(Files.exists(regionFolder.resolve("r.0.1.mca")));
+
+        Path stagingDir = VoxyMcaStager.stagingDir(regionFolder);
+        assertTrue(Files.exists(stagingDir.resolve("r.0.0.mca")));
+        assertFalse(Files.exists(stagingDir.resolve("r.0.1.mca")));
     }
 
     private static void waitForStaging() throws InterruptedException, IOException {

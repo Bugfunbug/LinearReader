@@ -26,7 +26,7 @@ import java.util.stream.Stream;
  * Voxy currently scans region folders for r.<x>.<z>.mca and parses the Anvil
  * sector table directly. It does not know how to import .linear files. This
  * bridge stages .mca sidecars next to the current dimension's .linear files.
- * The Fabric 1.21.11 auto importer owns running Voxy and removing staged files.
+ * The Fabric targets auto importers own running Voxy and removing staged files.
  */
 public final class VoxyMcaStager {
 
@@ -113,6 +113,12 @@ public final class VoxyMcaStager {
 
     public static Path statePath(Path regionFolder) {
         return regionFolder.resolve(STATE_NAME);
+    }
+
+    private static final String STAGING_SUBDIR = "linearreader-voxy-staging";
+
+    public static Path stagingDir(Path regionFolder) {
+        return regionFolder.resolve(STAGING_SUBDIR);
     }
 
     public static StartResult start(Path worldRoot, Path regionFolder) throws IOException {
@@ -256,10 +262,81 @@ public final class VoxyMcaStager {
                     throw new IOException("Refusing to write Voxy state outside world: " + stateRegion);
                 }
             }
+            if (stateRegion != null) {
+                Path regionFolder = normalizedRoot.resolve(stateRegion).normalize();
+                if (regionFolder.startsWith(normalizedRoot)) {
+                    clearStagingDir(stagingDir(regionFolder));
+                }
+            }
             manifestDeleted = Files.deleteIfExists(manifest);
         }
 
         return new CleanupResult(deleted, missing, failed, manifestDeleted);
+    }
+
+    /**
+     * Clears the persisted per-region-folder staging bookmark.
+     *
+     * Without this, once a full import session finishes and cleans up, the
+     * "complete" flag written by doStage() never gets consumed, so every
+     * future voxy-compat auto run (even in a later play session, even after
+     * new terrain generated) sees complete=true and stages nothing.
+     */
+    public static void resetState(Path regionFolder) throws IOException {
+        Files.deleteIfExists(statePath(regionFolder));
+    }
+
+    /**
+     * Removes orphaned .linearreader-voxy.tmp files left behind by a staging
+     * attempt that was interrupted (crash/force-quit) before the atomic
+     * rename to .mca completed. cleanup()/abort() can't catch these because
+     * they were never recorded in a manifest.
+     */
+    private static void cleanupOrphanedTempFiles(Path regionFolder) throws IOException {
+        Path stagingDir = stagingDir(regionFolder);
+        if (!Files.isDirectory(stagingDir)) return;
+        try (Stream<Path> stream = Files.list(stagingDir)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName().toString().endsWith(".linearreader-voxy.tmp"))
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                            LinearRuntime.LOGGER.info(
+                                    "[LinearReader] Removed orphaned Voxy staging temp file: {}", path.getFileName());
+                        } catch (IOException e) {
+                            LinearRuntime.LOGGER.warn(
+                                    "[LinearReader] Could not remove orphaned Voxy staging temp file {}: {}",
+                                    path.getFileName(), e.getMessage());
+                        }
+                    });
+        }
+    }
+
+    /**
+     * Once every manifest-tracked staged file has been successfully deleted,
+     * sweep the staging directory clean and remove it. This is a safety net,
+     * not just a tidiness pass — it also catches any .mca/.tmp file that for
+     * whatever reason never made it into the manifest, so a partial/odd
+     * staging run can't leave orphaned files behind indefinitely.
+     */
+    private static void clearStagingDir(Path stagingDir) {
+        if (!Files.isDirectory(stagingDir)) return;
+        try (Stream<Path> stream = Files.list(stagingDir)) {
+            stream.forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (IOException e) {
+                    LinearRuntime.LOGGER.warn(
+                            "[LinearReader] Could not remove leftover Voxy staging file {}: {}",
+                            path.getFileName(), e.getMessage());
+                }
+            });
+            Files.deleteIfExists(stagingDir);
+        } catch (IOException e) {
+            LinearRuntime.LOGGER.warn(
+                    "[LinearReader] Could not clean up Voxy staging directory {}: {}",
+                    stagingDir, e.getMessage());
+        }
     }
 
     static void resetForTests() {
@@ -282,6 +359,7 @@ public final class VoxyMcaStager {
 
     private static void doStage(Path worldRoot, Path regionFolder, Path manifest, int maxFiles, long maxLinearBytes)
             throws IOException {
+        cleanupOrphanedTempFiles(regionFolder);
         List<Path> linearFiles = collectLinearRegionFiles(regionFolder);
         PrepareState state = readState(regionFolder);
         BatchSelection selection = selectBatch(linearFiles, state.lastPreparedFile(), maxFiles, maxLinearBytes);
@@ -429,24 +507,26 @@ public final class VoxyMcaStager {
             return;
         }
 
+        Path stagingDir = stagingDir(regionFolder);
         String mcaName = sourceName.substring(0, sourceName.length() - ".linear".length()) + ".mca";
-        Path mcaDest = regionFolder.resolve(mcaName);
-        Path tmpDest = regionFolder.resolve("." + mcaName + ".linearreader-voxy.tmp");
+        Path mcaDest = stagingDir.resolve(mcaName);
+        Path tmpDest = stagingDir.resolve("." + mcaName + ".linearreader-voxy.tmp");
 
         try {
             if (Files.exists(mcaDest)) {
                 FILES_SKIPPED.incrementAndGet();
                 return;
             }
-            if (hasExternalChunkSidecars(regionFolder, regionCoords[0], regionCoords[1])) {
+            if (hasExternalChunkSidecars(stagingDir, regionCoords[0], regionCoords[1])) {
                 FILES_SKIPPED.incrementAndGet();
                 return;
             }
 
+            Files.createDirectories(stagingDir);
             Files.deleteIfExists(tmpDest);
-            exportOne(linearPath, tmpDest, regionFolder, regionCoords[0], regionCoords[1]);
+            exportOne(linearPath, tmpDest, stagingDir, regionCoords[0], regionCoords[1]);
             moveWithoutReplace(tmpDest, mcaDest);
-            recordStagedFiles(worldRoot, manifest, mcaDest, regionFolder, regionCoords[0], regionCoords[1]);
+            recordStagedFiles(worldRoot, manifest, mcaDest, stagingDir, regionCoords[0], regionCoords[1]);
             FILES_WRITTEN.incrementAndGet();
         } catch (Exception e) {
             FILES_FAILED.incrementAndGet();

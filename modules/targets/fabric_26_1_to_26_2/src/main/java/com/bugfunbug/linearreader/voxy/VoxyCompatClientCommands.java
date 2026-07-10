@@ -32,25 +32,25 @@ public final class VoxyCompatClientCommands {
     );
 
     static void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
-        dispatcher.register(ClientCommands.literal("linearreader")
-                .executes(ctx -> forwardToServer(ctx.getSource(), "linearreader"))
-                .then(ClientCommands.argument("serverCommand", StringArgumentType.greedyString())
-                        .suggests(VoxyCompatClientCommands::suggestArgs)
-                        .executes(VoxyCompatClientCommands::executeArgs)));
+        var root = ClientCommands.literal("linearreader")
+                .executes(ctx -> forwardToServer(ctx.getSource(), "linearreader"));
+
+        if (FabricLoader.getInstance().isModLoaded("voxy")) {
+            root.then(ClientCommands.literal("voxy-compat")
+                    .executes(ctx -> executeStatus(ctx.getSource()))
+                    .then(ClientCommands.literal("auto")
+                            .executes(ctx -> executeAuto(ctx.getSource()))));
+        }
+
+        root.then(ClientCommands.argument("serverCommand", StringArgumentType.greedyString())
+                .suggests(VoxyCompatClientCommands::suggestArgs)
+                .executes(VoxyCompatClientCommands::executeArgs));
+
+        dispatcher.register(root);
     }
 
     private static int executeArgs(CommandContext<FabricClientCommandSource> ctx) {
         String full = StringArgumentType.getString(ctx, "serverCommand");
-        String[] words = full.split(" ", -1);
-        boolean voxyLoaded = FabricLoader.getInstance().isModLoaded("voxy");
-
-        if (voxyLoaded && words.length >= 1 && "voxy-compat".equals(words[0])) {
-            if (words.length >= 2 && "auto".equals(words[1])) {
-                return executeAuto(ctx.getSource());
-            }
-            return executeStatus(ctx.getSource());
-        }
-
         return forwardToServer(ctx.getSource(), "linearreader " + full);
     }
 

@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
@@ -92,6 +93,8 @@ public final class VoxyCompatAutoImporter {
             Path worldRoot = server.getWorldPath(LevelResource.ROOT);
             Path regionFolder = DimensionType.getStorageFolder(level.dimension(), worldRoot).resolve("region");
 
+            VoxyMcaStager.resetState(regionFolder);
+
             if (FabricLoader.getInstance().isModLoaded("c2me-opts-accel-opencl")) {
                 post("[LinearReader] C2ME OpenCL is loaded. If world loading or Voxy import stalls, disable c2me-opts-accel-opencl and retry.");
             }
@@ -142,7 +145,7 @@ public final class VoxyCompatAutoImporter {
                     return;
                 }
 
-                long mcaFiles = countRegionMcaFiles(regionFolder);
+                long mcaFiles = countRegionMcaFiles(VoxyMcaStager.stagingDir(regionFolder));
                 if (mcaFiles > staged) {
                     VoxyMcaStager.abort(worldRoot);
                     post("[LinearReader] Voxy auto import stopped: found " + mcaFiles + " .mca region file(s), but only "
@@ -152,7 +155,7 @@ public final class VoxyCompatAutoImporter {
 
                 post("[LinearReader] Starting Voxy import for batch " + batches
                         + " (" + staged + " staged, " + skipped + " skipped)...");
-                VoxyImportHandle importHandle = VoxyReflection.startImport(regionFolder.toFile());
+                VoxyImportHandle importHandle = VoxyReflection.startImport(VoxyMcaStager.stagingDir(regionFolder).toFile());
                 waitForVoxy(importHandle);
 
                 waitForVoxySavingBacklog(importHandle, batches);
@@ -199,9 +202,7 @@ public final class VoxyCompatAutoImporter {
     }
 
     private static void waitForVoxy(VoxyImportHandle handle) throws Exception {
-        while (handle.isRunning()) {
-            Thread.sleep(250L);
-        }
+        handle.completion().get();
     }
 
     private static void waitForVoxySavingBacklog(VoxyImportHandle handle, int batch) throws Exception {
@@ -259,12 +260,8 @@ public final class VoxyCompatAutoImporter {
         });
     }
 
-    private record VoxyImportHandle(Object importer, Method isRunningMethod,
-                                    Object savingService, Method getTaskCountMethod) {
-        boolean isRunning() throws Exception {
-            return (Boolean) isRunningMethod.invoke(importer);
-        }
-
+    private record VoxyImportHandle(Object savingService, Method getTaskCountMethod,
+                                    CompletableFuture<Integer> completion) {
         int savingTaskCount() throws Exception {
             return (Integer) getTaskCountMethod.invoke(savingService);
         }
@@ -302,28 +299,40 @@ public final class VoxyCompatAutoImporter {
             Class<?> serviceManagerClass = Class.forName("me.cortex.voxy.common.thread.ServiceManager");
             Class<?> worldImporterClass = Class.forName("me.cortex.voxy.commonImpl.importers.WorldImporter");
             Constructor<?> constructor = worldImporterClass.getConstructor(
-                    worldEngineClass,
-                    Level.class,
-                    serviceManagerClass,
-                    BooleanSupplier.class
-            );
+                    worldEngineClass, Level.class, serviceManagerClass, BooleanSupplier.class);
             Object importer = constructor.newInstance(engine, level, serviceManager, runChecker);
             worldImporterClass.getMethod("importRegionDirectoryAsync", File.class)
                     .invoke(importer, regionFolder);
 
-            Object importManager = instance.getClass().getMethod("getImportManager").invoke(instance);
-            Class<?> dataImporterClass = Class.forName("me.cortex.voxy.commonImpl.importers.IDataImporter");
-            boolean started = (Boolean) importManager.getClass()
-                    .getMethod("tryRunImport", dataImporterClass)
-                    .invoke(importManager, importer);
-            if (!started) {
-                throw new IllegalStateException("Voxy already has an active import for this world.");
-            }
+            // Drive completion via the real callback instead of polling WorldImporter.isRunning():
+            // that flag is only ever cleared by shutdown(), which the normal completion path never
+            // calls, so it stays "true" forever after a successful import. See Voxy's WorldImporter
+            // source: runImport() sets isRunning=true; only shutdown() sets it back to false.
+            Class<?> completionCallbackClass = Class.forName(
+                    "me.cortex.voxy.commonImpl.importers.IDataImporter$ICompletionCallback");
+            Class<?> updateCallbackClass = Class.forName(
+                    "me.cortex.voxy.commonImpl.importers.IDataImporter$IUpdateCallback");
 
-            return new VoxyImportHandle(importer, worldImporterClass.getMethod("isRunning"),
-                    savingService, getTaskCount);
+            CompletableFuture<Integer> completion = new CompletableFuture<>();
+            Object completionCallback = Proxy.newProxyInstance(
+                    completionCallbackClass.getClassLoader(),
+                    new Class<?>[]{completionCallbackClass},
+                    (proxy, method, args) -> {
+                        if ("onCompletion".equals(method.getName())) {
+                            completion.complete((Integer) args[0]);
+                        }
+                        return null;
+                    });
+            Object updateCallback = Proxy.newProxyInstance(
+                    updateCallbackClass.getClassLoader(),
+                    new Class<?>[]{updateCallbackClass},
+                    (proxy, method, args) -> null);
+
+            worldImporterClass.getMethod("runImport", updateCallbackClass, completionCallbackClass)
+                    .invoke(importer, updateCallback, completionCallback);
+
+            return new VoxyImportHandle(savingService, getTaskCount, completion);
         }
-
         private static Field findField(Class<?> type, String name) throws NoSuchFieldException {
             Class<?> current = type;
             while (current != null) {
