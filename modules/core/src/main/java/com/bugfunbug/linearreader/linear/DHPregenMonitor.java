@@ -288,8 +288,20 @@ public final class DHPregenMonitor {
 
         @Override
         public void append(LogEvent event) {
+            // Ignore LinearReader's own log output. Without this, the status
+            // messages logged below (which quote the original trigger line,
+            // e.g. "...: \"[Chunky] Task started ...\"") would themselves
+            // contain "[Chunky]" and "Task started"/"Task finished", causing
+            // this appender to treat its own logging as a brand new Chunky
+            // event and recursively spam more logs.
+            if (LinearRuntime.LOGGER.getName().equals(event.getLoggerName())) {
+                return;
+            }
+
             String msg = event.getMessage().getFormattedMessage();
             if (msg == null) return;
+
+            // DH pregen
 
             // DH pregen
             if (msg.contains("regen") || msg.contains("Regen")) {
