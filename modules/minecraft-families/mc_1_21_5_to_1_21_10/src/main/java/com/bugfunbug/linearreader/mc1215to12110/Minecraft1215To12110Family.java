@@ -4,6 +4,7 @@ import com.bugfunbug.linearreader.minecraftapi.ChunkNbtAdapter;
 import com.bugfunbug.linearreader.minecraftapi.MinecraftFamily;
 import com.bugfunbug.linearreader.minecraftapi.RegionStorageHooks;
 import com.bugfunbug.linearreader.minecraftapi.WorldPathResolver;
+import net.minecraft.commands.CommandSourceStack;
 
 public final class Minecraft1215To12110Family implements MinecraftFamily {
 
@@ -24,5 +25,10 @@ public final class Minecraft1215To12110Family implements MinecraftFamily {
     @Override
     public ChunkNbtAdapter chunkNbtAdapter() {
         return Minecraft1215To12110ChunkNbtAdapter.INSTANCE;
+    }
+
+    @Override
+    public boolean hasOperatorCommandPermission(CommandSourceStack source) {
+        return source.hasPermission(2);
     }
 }
