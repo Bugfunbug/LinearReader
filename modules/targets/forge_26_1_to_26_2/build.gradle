@@ -33,7 +33,7 @@ def modName = targetProperty('mod_name')
 def modLicense = targetProperty('mod_license')
 def modAuthors = targetProperty('mod_authors')
 def modDescription = targetProperty('mod_description')
-def zstdVersion = '1.5.5-11'
+def zstdVersion = '1.5.7-11'
 
 version = targetProperty('mod_version')
 group = targetProperty('mod_group_id')
