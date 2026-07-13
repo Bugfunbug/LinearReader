@@ -2,9 +2,11 @@
 I performed three tests per platform, using the same seeds for the tests. The data 
 used for the graphs was the combined data of the three tests. All the tests were 
 done with the LinearReader specified in the names of the directories with the graph 
-images. THe tests were performed on my base model M4 MacBook Air. For the tests I 
-had my render distance set to 32 chunks and my simulation distance set to 12 chunks. 
-(Basically, all the tests were performed under identical conditions.)
+images. The tests for version 1.1.0 were done on the Minecraft version 1.20.1, and 
+the graphs for 1.2.0 were done on Minecraft 26.2. The tests were performed on my 
+base model M4 MacBook Air. For the tests I had my render distance set to 32 chunks 
+and my simulation distance set to 12 chunks.(Basically, all the tests were performed 
+under identical conditions.)
 
 As mentioned in the [wiki](https://github.com/Bugfunbug/LinearReader/wiki), 
 LinearReader initially compresses to a level much lower than 22 (unless otherwise 
