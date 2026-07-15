@@ -3,6 +3,7 @@ package com.bugfunbug.linearreader;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 import com.bugfunbug.linearreader.linear.LinearCoreTestHooks;
+import com.bugfunbug.linearreader.StoragePolicyManager;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 
@@ -48,7 +49,9 @@ public final class LinearTestSupport {
                 true,
                 20,
                 15,
-                true
+                true,
+                1200,
+                12
         );
 
         for (LinearRegionFile region : List.copyOf(LinearRegionFile.ALL_OPEN)) {

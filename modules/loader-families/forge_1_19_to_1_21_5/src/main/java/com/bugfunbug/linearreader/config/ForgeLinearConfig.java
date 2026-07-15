@@ -32,6 +32,8 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.IntValue     IDLE_THRESHOLD_MINUTES;
     private static final ForgeConfigSpec.IntValue     RECOMPRESS_MIN_FREE_RAM_PERCENT;
     private static final ForgeConfigSpec.BooleanValue BULK_CONVERT_ON_LOAD;
+    private static final ForgeConfigSpec.IntValue     PRUNE_MAX_INHABITED_TIME_TICKS;
+    private static final ForgeConfigSpec.IntValue     PRUNE_MIN_REGION_QUIET_HOURS;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -178,6 +180,24 @@ public final class ForgeLinearConfig {
                         "Default = true"
                 )
                 .define("bulkConvertOnLoad", true);
+        PRUNE_MAX_INHABITED_TIME_TICKS = builder
+                .comment(
+                        "Maximum cumulative InhabitedTime (in ticks) a chunk can have and",
+                        "still be eligible for /linearreader prune-chunks.",
+                        "A single flythrough is roughly 20-100 ticks; a repeatedly-visited",
+                        "chunk (e.g. an elytra highway) accumulates well past this.",
+                        "Default = 1200 (about 1 minute of cumulative loaded time)"
+                )
+                .defineInRange("pruneMaxInhabitedTimeTicks", 1200, 0, 1_000_000);
+
+        PRUNE_MIN_REGION_QUIET_HOURS = builder
+                .comment(
+                        "Hours a region file must have no writes before its chunks become",
+                        "eligible for pruning. Protects areas someone is actively playing near.",
+                        "Set to 0 to disable this check.",
+                        "Default = 12"
+                )
+                .defineInRange("pruneMinRegionQuietHours", 12, 0, 8760);
 
         SPEC = builder.build();
     }
@@ -206,7 +226,9 @@ public final class ForgeLinearConfig {
                 AUTO_RECOMPRESS_ENABLED.get(),
                 IDLE_THRESHOLD_MINUTES.get(),
                 RECOMPRESS_MIN_FREE_RAM_PERCENT.get(),
-                BULK_CONVERT_ON_LOAD.get()
+                BULK_CONVERT_ON_LOAD.get(),
+                PRUNE_MAX_INHABITED_TIME_TICKS.get(),
+                PRUNE_MIN_REGION_QUIET_HOURS.get()
         );
     }
 }

@@ -289,6 +289,12 @@ public final class ChunkPruner {
         if (!matcher.matches()) {
             return RegionAnalysis.notBusy(null, 0, 0L);
         }
+
+        long quietMs = LinearConfig.getPruneMinRegionQuietMs();
+        if (quietMs > 0L && System.currentTimeMillis() - lastModifiedMillis(regionPath) < quietMs) {
+            return RegionAnalysis.busyResult();
+        }
+
         int regionX = Integer.parseInt(matcher.group(1));
         int regionZ = Integer.parseInt(matcher.group(2));
         Path normalized = regionPath.toAbsolutePath().normalize();
@@ -472,7 +478,7 @@ public final class ChunkPruner {
         CompoundTag tag = nbt.unwrapChunkTag(rawTag);
 
         if (!nbt.hasNumeric(tag, "InhabitedTime")) return false;
-        if (nbt.getLongOrDefault(tag, "InhabitedTime", 0L) != 0L) return false;
+        if (nbt.getLongOrDefault(tag, "InhabitedTime", Long.MAX_VALUE) > LinearConfig.getPruneMaxInhabitedTimeTicks()) return false;
         if (hasNonEmptyList(nbt, tag, "block_entities") || hasNonEmptyList(nbt, tag, "TileEntities")) return false;
         if (hasNonEmptyList(nbt, tag, "entities") || hasNonEmptyList(nbt, tag, "Entities")) return false;
         if (hasStructureData(nbt, tag, "structures", "starts", "References")) return false;
@@ -732,13 +738,15 @@ public final class ChunkPruner {
         source.sendSuccess(() -> net.minecraft.network.chat.Component.literal(msg), false);
     }
 
-    private record RegionAnalysis(boolean busy, RegionPlan plan, int presentChunkCount, long estimatedReclaimBytes) {
+    private record RegionAnalysis(boolean busy, boolean recentlyModified, RegionPlan plan, int presentChunkCount, long estimatedReclaimBytes) {
         private static RegionAnalysis busyResult() {
-            return new RegionAnalysis(true, null, 0, 0L);
+            return new RegionAnalysis(true, false, null, 0, 0L);
         }
-
+        private static RegionAnalysis recentResult() {
+            return new RegionAnalysis(false, true, null, 0, 0L);
+        }
         private static RegionAnalysis notBusy(RegionPlan plan, int presentChunkCount, long estimatedReclaimBytes) {
-            return new RegionAnalysis(false, plan, presentChunkCount, estimatedReclaimBytes);
+            return new RegionAnalysis(false, false, plan, presentChunkCount, estimatedReclaimBytes);
         }
     }
 

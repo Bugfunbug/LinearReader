@@ -659,7 +659,7 @@ public final class LinearCommandRegistrar {
      *   <li><b>Duration</b> — a positive integer (seconds) or the literal
      *       {@code until-stopped} (records until {@code graph stop}).</li>
      *   <li><b>Interval</b> — a positive integer (seconds between samples).</li>
-     *   <li><b>Mode</b> (optional) — {@code single-graph} or
+     *   <li><b>Mode</b> — {@code single-graph} or
      *       {@code multiple-graphs} (defaults to multiple-graphs).</li>
      *   <li><b>Stats</b> — one or more {@link GraphStat} keys.</li>
      * </ol>

@@ -58,6 +58,12 @@ public class FabricLinearConfig {
     /** Minimum available JVM heap headroom required before recompression continues. */
     public int recompressMinFreeRamPercent = 15;
 
+    /** Maximum cumulative InhabitedTime (ticks) a chunk can have and still be prune-eligible. */
+    public int pruneMaxInhabitedTimeTicks = 1200;
+
+    /** Hours a region file must be untouched before its chunks are prune-eligible. */
+    public int pruneMinRegionQuietHours = 12;
+
     /**
      * If true, converts every legacy .mca file in the world to .linear immediately
      * on startup, before the world becomes joinable. If false, conversion still
@@ -82,6 +88,8 @@ public class FabricLinearConfig {
         diskSpaceWarnGb      = Math.max(-1, diskSpaceWarnGb);
         idleThresholdMinutes = clamp(idleThresholdMinutes, 5, 1440);
         recompressMinFreeRamPercent = clamp(recompressMinFreeRamPercent, 5, 50);
+        pruneMaxInhabitedTimeTicks = clamp(pruneMaxInhabitedTimeTicks, 0, 1_000_000);
+        pruneMinRegionQuietHours   = clamp(pruneMinRegionQuietHours, 0, 8760); // 0 = disabled, up to a year
     }
 
     private static int clamp(int v, int min, int max) {

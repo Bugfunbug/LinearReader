@@ -70,6 +70,12 @@ public final class LinearTestData {
         return tag;
     }
 
+    public static CompoundTag chunkWithInhabitedTime(long inhabitedTime, int chunkX, int chunkZ) {
+        CompoundTag tag = baseChunk(chunkX, chunkZ);
+        tag.putLong("InhabitedTime", inhabitedTime);
+        return tag;
+    }
+
     public static void writeRegion(Path path, Map<ChunkPos, CompoundTag> chunks) throws IOException {
         Path parent = path.getParent();
         if (parent != null) {

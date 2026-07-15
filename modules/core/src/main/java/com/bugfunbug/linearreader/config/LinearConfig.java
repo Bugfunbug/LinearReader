@@ -35,6 +35,8 @@ public final class LinearConfig {
     private static volatile int     idleThresholdMinutes  = 20;
     private static volatile int     recompressMinFreeRamPercent = 15;
     private static volatile boolean bulkConvertOnLoad = true;
+    private static volatile int     pruneMaxInhabitedTimeTicks = 1200;
+    private static volatile int     pruneMinRegionQuietHours = 12;
 
     // -------------------------------------------------------------------------
     // Getters — called everywhere in mod logic
@@ -58,6 +60,9 @@ public final class LinearConfig {
     public static int     getIdleThresholdMinutes() { return idleThresholdMinutes; }
     public static int     getRecompressMinFreeRamPercent() { return recompressMinFreeRamPercent; }
     public static boolean isBulkConvertOnLoad()     { return bulkConvertOnLoad; }
+    public static int getPruneMaxInhabitedTimeTicks() { return pruneMaxInhabitedTimeTicks; }
+    public static int getPruneMinRegionQuietHours()   { return pruneMinRegionQuietHours; }
+    public static long getPruneMinRegionQuietMs()     { return pruneMinRegionQuietHours * 3_600_000L; }
 
 
     // -------------------------------------------------------------------------
@@ -81,7 +86,9 @@ public final class LinearConfig {
             boolean autoRecompressEnabled,
             int     idleThresholdMinutes,
             int     recompressMinFreeRamPercent,
-            boolean bulkConvertOnLoad) {
+            boolean bulkConvertOnLoad,
+            int     pruneMaxInhabitedTimeTicks,
+            int     pruneMinRegionQuietHours) {
 
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
@@ -101,5 +108,7 @@ public final class LinearConfig {
         LinearConfig.idleThresholdMinutes  = idleThresholdMinutes;
         LinearConfig.recompressMinFreeRamPercent = recompressMinFreeRamPercent;
         LinearConfig.bulkConvertOnLoad = bulkConvertOnLoad;
+        LinearConfig.pruneMaxInhabitedTimeTicks = Math.max(0, pruneMaxInhabitedTimeTicks);
+        LinearConfig.pruneMinRegionQuietHours = Math.max(0, pruneMinRegionQuietHours);
     }
 }

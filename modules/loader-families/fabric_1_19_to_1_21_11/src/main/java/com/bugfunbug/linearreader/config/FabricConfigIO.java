@@ -118,6 +118,17 @@ public final class FabricConfigIO {
                 "If false, conversion still happens automatically for the whole world,",
                 "but runs in the background after the server has finished starting,",
                 "so players can join immediately.");
+        addInt(lines, "pruneMaxInhabitedTimeTicks", config.pruneMaxInhabitedTimeTicks,
+                "Maximum cumulative InhabitedTime (in ticks) a chunk can have and still",
+                "be eligible for /linearreader prune-chunks. A single flythrough is",
+                "roughly 20-100 ticks; a repeatedly-visited chunk (e.g. an elytra",
+                "highway) accumulates well past this.",
+                "Default = 1200 (about 1 minute of cumulative loaded time)");
+        addInt(lines, "pruneMinRegionQuietHours", config.pruneMinRegionQuietHours,
+                "Hours a region file must have no writes before its chunks become",
+                "eligible for pruning. Protects areas someone is actively playing near.",
+                "Set to 0 to disable this check.",
+                "Default = 12");
 
         try {
             Files.createDirectories(path.getParent());
@@ -162,6 +173,8 @@ public final class FabricConfigIO {
                     case "idleThresholdMinutes" -> config.idleThresholdMinutes = parseInt(key, value, config.idleThresholdMinutes);
                     case "recompressMinFreeRamPercent" -> config.recompressMinFreeRamPercent = parseInt(key, value, config.recompressMinFreeRamPercent);
                     case "bulkConvertOnLoad" -> config.bulkConvertOnLoad = parseBoolean(key, value, config.bulkConvertOnLoad);
+                    case "pruneMaxInhabitedTimeTicks" -> config.pruneMaxInhabitedTimeTicks = parseInt(key, value, config.pruneMaxInhabitedTimeTicks);
+                    case "pruneMinRegionQuietHours" -> config.pruneMinRegionQuietHours = parseInt(key, value, config.pruneMinRegionQuietHours);
                     default -> {}
                 }
             }
