@@ -33,6 +33,7 @@ def modLicense = targetProperty('mod_license')
 def modAuthors = targetProperty('mod_authors')
 def modDescription = targetProperty('mod_description')
 def zstdVersion = '1.5.7-11'
+def brotliVersion = '1.23.0'
 
 version = targetProperty('mod_version')
 group = targetProperty('mod_group_id')
@@ -67,6 +68,7 @@ sourceSets {
 
 configurations {
     zstdRuntime
+    brotliRuntime
 }
 
 dependencies {
@@ -77,6 +79,14 @@ dependencies {
     // Keep zstd-jni out of the mod module itself to avoid split-package crashes
     // with other mods that also bundle com.github.luben.zstd.
     zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+
+    brotliRuntime "com.aayushatharva.brotli4j:brotli4j:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-aarch64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-windows-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-aarch64:${brotliVersion}"
+
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
 
@@ -152,6 +162,9 @@ tasks.named('processTestResources', ProcessResources).configure {
         into 'META-INF/linearreader-libs'
         rename { 'zstd-jni.jar' }
     }
+    from(configurations.brotliRuntime) {
+        into 'META-INF/linearreader-libs'
+    }
 }
 
 tasks.named('test', Test).configure {
@@ -169,6 +182,9 @@ jar {
     from(configurations.zstdRuntime) {
         into 'META-INF/linearreader-libs'
         rename { 'zstd-jni.jar' }
+    }
+    from(configurations.brotliRuntime) {
+        into 'META-INF/linearreader-libs'
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 

@@ -25,6 +25,7 @@ def neoforgeVersionRange = targetProperty('neoforge_version_range')
 def loaderVersionRange = targetProperty('loader_version_range')
 def modConfigName = targetProperty('mod_config_name')
 def zstdVersion = targetProperty('zstd_version')
+def brotliVersion = targetProperty('brotli_version')
 def modId = targetProperty('mod_id')
 def modName = targetProperty('mod_name')
 def modLicense = targetProperty('mod_license')
@@ -73,6 +74,7 @@ sourceSets {
 
 configurations {
     zstdRuntime
+    brotliRuntime
 }
 
 repositories {
@@ -86,6 +88,12 @@ dependencies {
     testImplementation sourceSets.main.output
     testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
     zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:brotli4j:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-aarch64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-windows-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-aarch64:${brotliVersion}"
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -164,6 +172,9 @@ jar {
     from(configurations.zstdRuntime) {
         into 'META-INF/linearreader-libs'
         rename { 'zstd-jni.jar' }
+    }
+    from(configurations.brotliRuntime) {
+        into 'META-INF/linearreader-libs'
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
