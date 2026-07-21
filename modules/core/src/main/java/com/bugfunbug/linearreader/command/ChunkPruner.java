@@ -487,11 +487,12 @@ public final class ChunkPruner {
                 || hasNonEmptyList(nbt, tag, "TileTicks") || hasNonEmptyList(nbt, tag, "LiquidTicks")) return false;
         if (hasNonEmptyNestedListList(nbt, tag, "PostProcessing")) return false;
         if (hasNonEmptyCompound(nbt, tag, "UpgradeData") || hasNonEmptyCompound(nbt, tag, "upgradeData")) return false;
+
         return true;
     }
 
     private static boolean hasNonEmptyList(ChunkNbtAdapter nbt, CompoundTag tag, String key) {
-        ListTag list = nbt.getListOrEmpty(tag, key, Tag.TAG_END);
+        ListTag list = nbt.getListOrEmpty(tag, key, Tag.TAG_COMPOUND);
         return !list.isEmpty();
     }
 
