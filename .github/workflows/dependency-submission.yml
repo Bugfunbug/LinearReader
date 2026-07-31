@@ -23,4 +23,35 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - uses: gradle/actions/dependency-submission@v4
+      - name: Limit targets for dependency scan
+        run: |
+          cp settings.gradle settings.gradle.backup
+
+          python3 <<'EOF'
+          from pathlib import Path
+
+          p = Path("settings.gradle")
+          text = p.read_text()
+
+          start = text.index("include(\":targets\")")
+          end = text.index("}", start) + 1
+
+          replacement = """
+          include(\":targets\")
+          project(\":targets\").projectDir = file(\"modules/targets\")
+
+          include(\":targets:forge_1_20_to_1_20_1\")
+          project(\":targets:forge_1_20_to_1_20_1\").projectDir = file(\"modules/targets/forge_1_20_to_1_20_1\")
+
+          include(\":targets:fabric_1_20_to_1_20_1\")
+          project(\":targets:fabric_1_20_to_1_20_1\").projectDir = file(\"modules/targets/fabric_1_20_to_1_20_1\")
+
+          include(\":targets:neoforge_1_20_2_to_1_20_4\")
+          project(\":targets:neoforge_1_20_2_to_1_20_4\").projectDir = file(\"modules/targets/neoforge_1_20_2_to_1_20_4\")
+          """
+
+          p.write_text(text[:start] + replacement + text[end:])
+          EOF
+
+      - name: Submit dependency graph
+        uses: gradle/actions/dependency-submission@v4
