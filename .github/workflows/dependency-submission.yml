@@ -23,34 +23,46 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Limit targets for dependency scan
+      - name: Use minimal settings for dependency scan
         run: |
           cp settings.gradle settings.gradle.backup
 
-          python3 <<'EOF'
-          from pathlib import Path
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  maven {
+                      name = "NeoForged"
+                      url = "https://maven.neoforged.net/releases"
+                  }
+                  maven {
+                      name = "Fabric"
+                      url = "https://maven.fabricmc.net/"
+                  }
+                  maven {
+                      name = "MinecraftForge"
+                      url = "https://maven.minecraftforge.net/"
+                  }
+                  maven {
+                      url = "https://maven.parchmentmc.org"
+                  }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
 
-          p = Path("settings.gradle")
-          text = p.read_text()
+          rootProject.name = "LinearReader-workspace"
 
-          start = text.index("include(\":targets\")")
-          end = text.index("}", start) + 1
+          include(":targets")
+          project(":targets").projectDir = file("modules/targets")
 
-          replacement = """
-          include(\":targets\")
-          project(\":targets\").projectDir = file(\"modules/targets\")
+          include(":targets:forge_1_20_to_1_20_1")
+          project(":targets:forge_1_20_to_1_20_1").projectDir = file("modules/targets/forge_1_20_to_1_20_1")
 
-          include(\":targets:forge_1_20_to_1_20_1\")
-          project(\":targets:forge_1_20_to_1_20_1\").projectDir = file(\"modules/targets/forge_1_20_to_1_20_1\")
+          include(":targets:fabric_1_20_to_1_20_1")
+          project(":targets:fabric_1_20_to_1_20_1").projectDir = file("modules/targets/fabric_1_20_to_1_20_1")
 
-          include(\":targets:fabric_1_20_to_1_20_1\")
-          project(\":targets:fabric_1_20_to_1_20_1\").projectDir = file(\"modules/targets/fabric_1_20_to_1_20_1\")
-
-          include(\":targets:neoforge_1_20_2_to_1_20_4\")
-          project(\":targets:neoforge_1_20_2_to_1_20_4\").projectDir = file(\"modules/targets/neoforge_1_20_2_to_1_20_4\")
-          """
-
-          p.write_text(text[:start] + replacement + text[end:])
+          include(":targets:neoforge_1_20_2_to_1_20_4")
+          project(":targets:neoforge_1_20_2_to_1_20_4").projectDir = file("modules/targets/neoforge_1_20_2_to_1_20_4")
           EOF
 
       - name: Submit dependency graph
