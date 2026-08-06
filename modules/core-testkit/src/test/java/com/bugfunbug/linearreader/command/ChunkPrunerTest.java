@@ -42,7 +42,7 @@ class ChunkPrunerTest {
                 "worlds/prune-candidates",
                 tempDir.resolve("prune-candidates")
         );
-        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0);
+        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0, "zstd", "zstd");
 
         ChunkPruner.PruneAnalysis analysis = ChunkPruner.analyzeWorld(worldRoot, null, System.nanoTime());
 
@@ -63,7 +63,7 @@ class ChunkPrunerTest {
                 "worlds/prune-candidates",
                 tempDir.resolve("prune-changed")
         );
-        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0);
+        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0, "zstd", "zstd");
 
         ChunkPruner.PruneAnalysis analysis = ChunkPruner.analyzeWorld(worldRoot, null, System.nanoTime());
         Path target = worldRoot.resolve("region/r.0.0.linear");
@@ -80,7 +80,7 @@ class ChunkPrunerTest {
                 tempDir.resolve("prune-apply")
         );
         Path regionPath = worldRoot.resolve("region/r.0.0.linear");
-        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0);
+        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0, "zstd", "zstd");
 
         ChunkPruner.PruneAnalysis analysis = ChunkPruner.analyzeWorld(worldRoot, null, System.nanoTime());
         assertTrue(ChunkPruner.validatePlan(analysis));
@@ -107,7 +107,7 @@ class ChunkPrunerTest {
     @Test
     void prunesFlythroughChunkButProtectsRepeatedlyVisitedChunk() throws IOException {
         // Disable the quiet-region gate so this test isolates the InhabitedTime threshold only.
-        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0);
+        LinearConfig.update(4, 256, true, 32, 2048, 30, 60, 4, 60, 4, 16, 500, 1, true, 20, 15, true, 1200, 0, "zstd", "zstd");
 
         Path regionPath = tempDir.resolve("flythrough/region/r.0.0.linear");
         LinearTestData.writeRegion(regionPath, Map.of(

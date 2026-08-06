@@ -14,6 +14,10 @@ public final class LinearConfig {
 
     private LinearConfig() {}
 
+    /** Valid values for backupCompressionAlgorithm / idleRecompressAlgorithm. */
+    public static final String ZSTD = "zstd";
+    public static final String BROTLI = "brotli";
+
     // -------------------------------------------------------------------------
     // Live values — read by all mod code
     // -------------------------------------------------------------------------
@@ -37,6 +41,8 @@ public final class LinearConfig {
     private static volatile boolean bulkConvertOnLoad = true;
     private static volatile int     pruneMaxInhabitedTimeTicks = 1200;
     private static volatile int     pruneMinRegionQuietHours = 12;
+    private static volatile String  backupCompressionAlgorithm = ZSTD;
+    private static volatile String  idleRecompressAlgorithm    = ZSTD;
 
     // -------------------------------------------------------------------------
     // Getters — called everywhere in mod logic
@@ -63,6 +69,8 @@ public final class LinearConfig {
     public static int getPruneMaxInhabitedTimeTicks() { return pruneMaxInhabitedTimeTicks; }
     public static int getPruneMinRegionQuietHours()   { return pruneMinRegionQuietHours; }
     public static long getPruneMinRegionQuietMs()     { return pruneMinRegionQuietHours * 3_600_000L; }
+    public static String  getBackupCompressionAlgorithm() { return backupCompressionAlgorithm; }
+    public static String  getIdleRecompressAlgorithm()    { return idleRecompressAlgorithm; }
 
 
     // -------------------------------------------------------------------------
@@ -88,7 +96,9 @@ public final class LinearConfig {
             int     recompressMinFreeRamPercent,
             boolean bulkConvertOnLoad,
             int     pruneMaxInhabitedTimeTicks,
-            int     pruneMinRegionQuietHours) {
+            int     pruneMinRegionQuietHours,
+            String  backupCompressionAlgorithm,
+            String  idleRecompressAlgorithm) {
 
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
@@ -110,5 +120,19 @@ public final class LinearConfig {
         LinearConfig.bulkConvertOnLoad = bulkConvertOnLoad;
         LinearConfig.pruneMaxInhabitedTimeTicks = Math.max(0, pruneMaxInhabitedTimeTicks);
         LinearConfig.pruneMinRegionQuietHours = Math.max(0, pruneMinRegionQuietHours);
+        LinearConfig.backupCompressionAlgorithm = normalizeAlgorithm(backupCompressionAlgorithm);
+        LinearConfig.idleRecompressAlgorithm = normalizeAlgorithm(idleRecompressAlgorithm);
+    }
+
+    /**
+     * Falls back to Zstd for any unrecognized/missing value instead of
+     * throwing - a typo'd or stale config value should degrade to the safe,
+     * always-available default, not break startup.
+     */
+    private static String normalizeAlgorithm(String value) {
+        if (BROTLI.equalsIgnoreCase(value)) {
+            return BROTLI;
+        }
+        return ZSTD;
     }
 }

@@ -2,6 +2,7 @@ package com.bugfunbug.linearreader;
 
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.DHPregenMonitor;
+import com.bugfunbug.linearreader.linear.CompressionAlgorithm;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
 
@@ -1167,9 +1168,15 @@ public final class StoragePolicyManager {
 
         synchronized void noteRecompressed(long nowNs, int compressionLevel, long bytesSaved) {
             decayLocked(nowNs);
-            if ((compressionLevel & 0xFF) >= IdleRecompressor.TARGET_LEVEL || bytesSaved <= 0L) {
+            if (bytesSaved <= 0L) {
                 compressionDebt = 0.0D;
             } else {
+                // computeCompressionDebt already returns exactly 0.0 once compressionLevel
+                // is already-as-good-as the configured idle-recompress target, so a
+                // separate "already at max" gate isn't needed here anymore - the old
+                // raw ">= TARGET_LEVEL" comparison this replaced was Zstd-only and wrongly
+                // flagged any Brotli-encoded byte (always > 22) as "already at max"
+                // regardless of Brotli quality actually achieved.
                 compressionDebt = Math.min(compressionDebt,
                         computeCompressionDebt(bytesSaved, Math.max(1L, bytesSaved), compressionLevel));
             }
@@ -1215,11 +1222,40 @@ public final class StoragePolicyManager {
     }
 
     private static double computeCompressionDebt(long uncompressedBytes, long compressedBytes, int compressionLevel) {
-        int targetLevel = IdleRecompressor.TARGET_LEVEL;
-        int levelGap = Math.max(0, targetLevel - Math.max(0, compressionLevel & 0xFF));
-        if (levelGap == 0) return 0.0D;
+        CompressionAlgorithm.Encoded current;
+        try {
+            current = CompressionAlgorithm.decode(compressionLevel & 0xFF);
+        } catch (IllegalArgumentException e) {
+            return 0.0D; // corrupt/unrecognized byte - don't let bad data blow up debt scoring
+        }
 
-        double levelFactor = levelGap / (double) Math.max(1, targetLevel - 1);
+        CompressionAlgorithm.Algorithm targetAlgorithm =
+                LinearConfig.BROTLI.equalsIgnoreCase(LinearConfig.getIdleRecompressAlgorithm())
+                        ? CompressionAlgorithm.Algorithm.BROTLI
+                        : CompressionAlgorithm.Algorithm.ZSTD;
+        int targetLevelOrQuality = targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI
+                ? CompressionAlgorithm.BROTLI_QUALITY
+                : CompressionAlgorithm.ZSTD_LEVEL;
+
+        if (CompressionAlgorithm.isAlreadyAsGoodAs(current, targetAlgorithm, targetLevelOrQuality)) {
+            return 0.0D;
+        }
+
+        double levelFactor;
+        if (current.algorithm() == targetAlgorithm) {
+            // Same algorithm, not yet at target level/quality - same shape as the
+            // original formula, generalized to either algorithm's own scale.
+            int gap = Math.max(0, targetLevelOrQuality - current.levelOrQuality());
+            levelFactor = gap / (double) Math.max(1, targetLevelOrQuality - 1);
+        } else {
+            // Different algorithms only ever means current=Zstd, target=Brotli here -
+            // the reverse (current=Brotli, target=Zstd) is already handled by
+            // isAlreadyAsGoodAs returning true above, since Brotli always outranks
+            // Zstd. Any Zstd level is equally "not yet upgraded" once the real
+            // target is a different, always-better algorithm.
+            levelFactor = 1.0D;
+        }
+
         long referenceBytes = Math.max(Math.max(0L, uncompressedBytes), Math.max(0L, compressedBytes));
         double sizeFactor = clamp(referenceBytes / COMPRESSION_DEBT_BYTES_SCALE, 0.25D, 3.0D);
         return levelFactor * sizeFactor;

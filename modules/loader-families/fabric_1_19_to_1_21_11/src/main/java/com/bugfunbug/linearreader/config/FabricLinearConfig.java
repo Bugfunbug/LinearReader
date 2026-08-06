@@ -64,6 +64,12 @@ public class FabricLinearConfig {
     /** Hours a region file must be untouched before its chunks are prune-eligible. */
     public int pruneMinRegionQuietHours = 12;
 
+    /** Which algorithm the idle/AFK recompressor uses for cold storage: "zstd" or "brotli". */
+    public String idleRecompressAlgorithm = "zstd";
+
+    /** Which algorithm backups use for cold storage: "zstd" or "brotli". */
+    public String backupCompressionAlgorithm = "zstd";
+
     /**
      * If true, converts every legacy .mca file in the world to .linear immediately
      * on startup, before the world becomes joinable. If false, conversion still

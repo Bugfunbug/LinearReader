@@ -57,7 +57,9 @@ public final class Fabric261To262Bootstrap implements LoaderBootstrap {
                 cfg.recompressMinFreeRamPercent,
                 cfg.bulkConvertOnLoad,
                 cfg.pruneMaxInhabitedTimeTicks,
-                cfg.pruneMinRegionQuietHours
+                cfg.pruneMinRegionQuietHours,
+                cfg.idleRecompressAlgorithm,
+                cfg.backupCompressionAlgorithm
         );
     }
 }

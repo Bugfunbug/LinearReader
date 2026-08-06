@@ -129,6 +129,13 @@ public final class FabricConfigIO {
                 "eligible for pruning. Protects areas someone is actively playing near.",
                 "Set to 0 to disable this check.",
                 "Default = 12");
+        addString(lines, "idleRecompressAlgorithm", config.idleRecompressAlgorithm,
+                "Which algorithm the idle/AFK recompressor uses for cold storage: zstd or brotli.",
+                "Brotli produces smaller files but is much slower.",
+                "Default = zstd");
+        addString(lines, "backupCompressionAlgorithm", config.backupCompressionAlgorithm,
+                "Which algorithm backups (.linear.bak files) use: zstd or brotli.",
+                "Default = zstd");
 
         try {
             Files.createDirectories(path.getParent());
@@ -175,6 +182,8 @@ public final class FabricConfigIO {
                     case "bulkConvertOnLoad" -> config.bulkConvertOnLoad = parseBoolean(key, value, config.bulkConvertOnLoad);
                     case "pruneMaxInhabitedTimeTicks" -> config.pruneMaxInhabitedTimeTicks = parseInt(key, value, config.pruneMaxInhabitedTimeTicks);
                     case "pruneMinRegionQuietHours" -> config.pruneMinRegionQuietHours = parseInt(key, value, config.pruneMinRegionQuietHours);
+                    case "idleRecompressAlgorithm" -> config.idleRecompressAlgorithm = parseAlgorithm(key, value, config.idleRecompressAlgorithm);
+                    case "backupCompressionAlgorithm" -> config.backupCompressionAlgorithm = parseAlgorithm(key, value, config.backupCompressionAlgorithm);
                     default -> {}
                 }
             }
@@ -227,6 +236,16 @@ public final class FabricConfigIO {
         return fallback;
     }
 
+    private static String parseAlgorithm(String key, String value, String fallback) {
+        if ("zstd".equalsIgnoreCase(value) || "brotli".equalsIgnoreCase(value)) {
+            return value.toLowerCase(java.util.Locale.ROOT);
+        }
+        LinearRuntime.LOGGER.warn(
+                "[LinearReader] Invalid value for Fabric config key {}: {} (must be zstd or brotli). Keeping {}.",
+                key, value, fallback);
+        return fallback;
+    }
+
     private static void addInt(List<String> lines, String key, int value, String... comments) {
         addComments(lines, comments);
         lines.add(key + " = " + value);
@@ -234,6 +253,12 @@ public final class FabricConfigIO {
     }
 
     private static void addBool(List<String> lines, String key, boolean value, String... comments) {
+        addComments(lines, comments);
+        lines.add(key + " = " + value);
+        lines.add("");
+    }
+
+    private static void addString(List<String> lines, String key, String value, String... comments) {
         addComments(lines, comments);
         lines.add(key + " = " + value);
         lines.add("");

@@ -30,6 +30,8 @@ public final class NeoForgeLinearConfig {
     private static final ModConfigSpec.BooleanValue BULK_CONVERT_ON_LOAD;
     private static final ModConfigSpec.IntValue     PRUNE_MAX_INHABITED_TIME_TICKS;
     private static final ModConfigSpec.IntValue     PRUNE_MIN_REGION_QUIET_HOURS;
+    private static final ModConfigSpec.ConfigValue<String> IDLE_RECOMPRESS_ALGORITHM;
+    private static final ModConfigSpec.ConfigValue<String> BACKUP_COMPRESSION_ALGORITHM;
 
     static {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -192,6 +194,21 @@ public final class NeoForgeLinearConfig {
                         "Default = 12"
                 )
                 .defineInRange("pruneMinRegionQuietHours", 12, 0, 8760);
+        IDLE_RECOMPRESS_ALGORITHM = builder
+                .comment(
+                        "Which algorithm the idle/AFK recompressor uses for cold storage: \"zstd\" or \"brotli\".",
+                        "Brotli produces smaller files but is much slower - only used for the",
+                        "background/manual recompress pass, never live writes.",
+                        "Default = zstd"
+                )
+                .define("idleRecompressAlgorithm", "zstd");
+
+        BACKUP_COMPRESSION_ALGORITHM = builder
+                .comment(
+                        "Which algorithm backups (.linear.bak files) use for cold storage: \"zstd\" or \"brotli\".",
+                        "Default = zstd"
+                )
+                .define("backupCompressionAlgorithm", "zstd");
 
         SPEC = builder.build();
     }
@@ -218,7 +235,9 @@ public final class NeoForgeLinearConfig {
                 RECOMPRESS_MIN_FREE_RAM_PERCENT.get(),
                 BULK_CONVERT_ON_LOAD.get(),
                 PRUNE_MAX_INHABITED_TIME_TICKS.get(),
-                PRUNE_MIN_REGION_QUIET_HOURS.get()
+                PRUNE_MIN_REGION_QUIET_HOURS.get(),
+                IDLE_RECOMPRESS_ALGORITHM.get(),
+                BACKUP_COMPRESSION_ALGORITHM.get()
         );
     }
 }

@@ -51,7 +51,9 @@ public final class LinearTestSupport {
                 15,
                 true,
                 1200,
-                12
+                12,
+                "zstd",
+                "zstd"
         );
 
         for (LinearRegionFile region : List.copyOf(LinearRegionFile.ALL_OPEN)) {

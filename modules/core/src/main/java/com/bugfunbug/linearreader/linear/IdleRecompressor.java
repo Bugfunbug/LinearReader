@@ -11,6 +11,9 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.*;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
@@ -42,6 +45,10 @@ public final class IdleRecompressor {
 
     /** Zstd level used during idle/AFK recompression. */
     public static final int  TARGET_LEVEL      = 22;
+    /** Dimension folder this manual run is restricted to, or null for "all dimensions". */
+    private static volatile Path MANUAL_DIMENSION_FILTER = null;
+    /** Algorithm the currently-running manual recompression targets. */
+    private static volatile CompressionAlgorithm.Algorithm MANUAL_ALGORITHM = CompressionAlgorithm.Algorithm.ZSTD;
     private static final long CHECK_INTERVAL_MS = 60L * 1_000L;  // poll every minute
     private static final long IO_NOTIFY_INTERVAL_MS = 250L;
     /** Pause between files - keeps disk load low during recompression. */
@@ -52,6 +59,34 @@ public final class IdleRecompressor {
 
     // Region folders registered as each RegionFileStorage opens.
     private static final Set<Path> KNOWN_FOLDERS = ConcurrentHashMap.newKeySet();
+
+    /**
+     * How many region files may compress concurrently. Kept small and
+     * hardcoded rather than config-driven - Brotli quality 11 is CPU-heavy
+     * per file, and this pool only ever runs during otherwise-idle periods
+     * (gated by StoragePolicyManager.maintenanceBudgetFiles()/quietness)
+     * anyway. Bump this constant directly if you want 3 instead of 2.
+     */
+    private static final int PARALLEL_RECOMPRESS_SLOTS = 2;
+
+    private static volatile ExecutorService recompressExecutor = createRecompressExecutor();
+    private static final Semaphore RECOMPRESS_SLOTS = new Semaphore(PARALLEL_RECOMPRESS_SLOTS);
+
+    private static ExecutorService createRecompressExecutor() {
+        return Executors.newFixedThreadPool(PARALLEL_RECOMPRESS_SLOTS, r -> {
+            Thread t = new Thread(r, "lr-recompressor-worker");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY + 1);
+            return t;
+        });
+    }
+
+    private static synchronized ExecutorService getRecompressExecutor() {
+        if (recompressExecutor == null || recompressExecutor.isShutdown() || recompressExecutor.isTerminated()) {
+            recompressExecutor = createRecompressExecutor();
+        }
+        return recompressExecutor;
+    }
 
     // Idle detection.
     private static final AtomicLong    LAST_IO_MS = new AtomicLong(System.currentTimeMillis());
@@ -73,6 +108,11 @@ public final class IdleRecompressor {
     private static volatile long       lastDecisionAtMs = 0L;
     private static volatile String     lastDecisionSummary = "none";
     private static volatile String     lastDecisionDetail = "none";
+
+    /** Human-readable description of the current/most recent run's target, e.g. "zstd level 22" or "brotli quality 11". */
+    private static volatile String lastTargetDescription = "none";
+
+    public static String lastTargetDescription() { return lastTargetDescription; }
 
     private enum RecompressOutcome {
         UPGRADED,
@@ -146,9 +186,18 @@ public final class IdleRecompressor {
         t.start();
     }
 
-    /** Returns false if already running. */
-    public static boolean startManual() {
+    /**
+     * Returns false if already running.
+     *
+     * @param algorithm       which algorithm this manual run recompresses to.
+     * @param dimensionFilter if non-null, only region/poi/entities folders under this
+     *                        dimension's storage root are processed; null means every
+     *                        registered folder (all dimensions), matching today's behavior.
+     */
+    public static boolean startManual(CompressionAlgorithm.Algorithm algorithm, Path dimensionFilter) {
         if (RUNNING.get()) return false;
+        MANUAL_ALGORITHM = algorithm;
+        MANUAL_DIMENSION_FILTER = dimensionFilter;
         startWorker(true);
         return true;
     }
@@ -162,6 +211,10 @@ public final class IdleRecompressor {
         Thread detector = DETECTOR;
         if (detector != null) detector.interrupt();
         interruptWorker();
+        ExecutorService executor = recompressExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
         KNOWN_FOLDERS.clear();
     }
 
@@ -230,10 +283,10 @@ public final class IdleRecompressor {
             return;
         }
 
-        StringBuilder msg = new StringBuilder("[LinearReader] Recompression done: ")
+        StringBuilder msg = new StringBuilder("[LinearReader] Recompression done (target: ")
+                .append(lastTargetDescription).append("): ")
                 .append(FILES_RECOMPRESSED.get()).append(" upgraded, ")
-                .append(FILES_ALREADY_OPTIMAL.get()).append(" already at level ")
-                .append(TARGET_LEVEL).append(", ")
+                .append(FILES_ALREADY_OPTIMAL.get()).append(" already optimal, ")
                 .append(FILES_UNSTABLE_SKIPPED.get()).append(" skipped (dirty/flushing)");
 
         int noGain = FILES_NO_SIZE_GAIN.get();
@@ -261,8 +314,20 @@ public final class IdleRecompressor {
     }
 
     private static void doRecompression() {
-        int budgetRemaining = IS_MANUAL.get() ? Integer.MAX_VALUE : StoragePolicyManager.maintenanceBudgetFiles();
-        if (!IS_MANUAL.get() && budgetRemaining <= 0) {
+        boolean manual = IS_MANUAL.get();
+        CompressionAlgorithm.Algorithm targetAlgorithm = manual
+                ? MANUAL_ALGORITHM
+                : algorithmFromConfigValue(LinearConfig.getIdleRecompressAlgorithm());
+        int targetLevelOrQuality = targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI
+                ? CompressionAlgorithm.BROTLI_QUALITY
+                : CompressionAlgorithm.ZSTD_LEVEL;
+        Path dimensionFilter = manual ? MANUAL_DIMENSION_FILTER : null;
+        lastTargetDescription = targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI
+                ? ("brotli quality " + targetLevelOrQuality)
+                : ("zstd level " + targetLevelOrQuality);
+
+        int budgetRemaining = manual ? Integer.MAX_VALUE : StoragePolicyManager.maintenanceBudgetFiles();
+        if (!manual && budgetRemaining <= 0) {
             noteDecision("maintenance deferred",
                     "budget=0 profile=" + StoragePolicyManager.debugSnapshot().loadProfile(), true);
             return;
@@ -270,6 +335,10 @@ public final class IdleRecompressor {
         for (Path folder : KNOWN_FOLDERS) {
             if (Thread.currentThread().isInterrupted()) return;
             if (!Files.isDirectory(folder)) continue;
+            if (dimensionFilter != null && !folder.toAbsolutePath().normalize()
+                    .startsWith(dimensionFilter.toAbsolutePath().normalize())) {
+                continue;
+            }
 
             Path[] files;
             try (Stream<Path> s = Files.list(folder)) {
@@ -286,60 +355,96 @@ public final class IdleRecompressor {
 
             for (Path p : files) {
                 if (Thread.currentThread().isInterrupted()) return;
-                if (!IS_MANUAL.get() && StoragePolicyManager.maintenanceBudgetFiles() <= 0) {
+                if (!manual && StoragePolicyManager.maintenanceBudgetFiles() <= 0) {
                     noteDecision("maintenance budget exhausted",
                             "folder=" + folder.getFileName(), true);
                     return;
                 }
-                if (!IS_MANUAL.get() && StoragePolicyManager.recompressPriority(p) <= 0.0D) {
+                if (!manual && StoragePolicyManager.recompressPriority(p) <= 0.0D) {
                     noteDecision("no cold recompress candidates",
                             "folder=" + folder.getFileName(), false);
                     break;
                 }
-                if (!IS_MANUAL.get() && budgetRemaining <= 0) {
+                if (!manual && budgetRemaining <= 0) {
                     noteDecision("maintenance budget exhausted",
                             "folder=" + folder.getFileName(), true);
                     return;
                 }
-                FILES_SCANNED.incrementAndGet();
                 try {
-                    RecompressResult result = recompressFile(p);
-                    switch (result.outcome()) {
-                        case UPGRADED -> {
-                            BYTES_SAVED.addAndGet(result.bytesSaved());
-                            FILES_RECOMPRESSED.incrementAndGet();
-                            StoragePolicyManager.recordRegionRecompressed(p, TARGET_LEVEL, result.bytesSaved());
-                        }
-                        case ALREADY_OPTIMAL -> {
-                            FILES_ALREADY_OPTIMAL.incrementAndGet();
-                            StoragePolicyManager.recordRegionRecompressed(p, TARGET_LEVEL, 0L);
-                        }
-                        case UNSTABLE_SKIPPED -> {
-                            FILES_UNSTABLE_SKIPPED.incrementAndGet();
-                            noteDecision("hot region skipped", "file=" + p.getFileName(), false);
-                        }
-                        case NO_SIZE_GAIN -> FILES_NO_SIZE_GAIN.incrementAndGet();
-                    }
-                    if (result.outcome() == RecompressOutcome.UPGRADED) {
-                        LinearRuntime.LOGGER.debug(
-                                "[LinearReader] Recompressed {} - saved {} bytes.",
-                                p.getFileName(), result.bytesSaved());
-                    }
-                    if (result.outcome() != RecompressOutcome.UNSTABLE_SKIPPED) {
-                        if (!IS_MANUAL.get()) {
-                            budgetRemaining--;
-                        }
-                        Thread.sleep(FILE_DELAY_MS);
-                    }
+                    RECOMPRESS_SLOTS.acquire();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
-                } catch (IOException e) {
-                    FILES_FAILED.incrementAndGet();
-                    LinearRuntime.LOGGER.warn("[LinearReader] Recompression failed for {}: {}",
-                            p.getFileName(), e.getMessage());
+                }
+
+                FILES_SCANNED.incrementAndGet();
+                if (!manual) {
+                    budgetRemaining--;
+                }
+
+                getRecompressExecutor().submit(() -> {
+                    try {
+                        RecompressResult result = recompressFile(p, targetAlgorithm, targetLevelOrQuality);
+                        int encodedTargetLevel = targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI
+                                ? (CompressionAlgorithm.encodeBrotli(targetLevelOrQuality) & 0xFF)
+                                : (CompressionAlgorithm.encodeZstd(targetLevelOrQuality) & 0xFF);
+                        switch (result.outcome()) {
+                            case UPGRADED -> {
+                                BYTES_SAVED.addAndGet(result.bytesSaved());
+                                FILES_RECOMPRESSED.incrementAndGet();
+                                StoragePolicyManager.recordRegionRecompressed(p, encodedTargetLevel, result.bytesSaved());
+                                LinearRuntime.LOGGER.debug(
+                                        "[LinearReader] Recompressed {} - saved {} bytes.",
+                                        p.getFileName(), result.bytesSaved());
+                            }
+                            case ALREADY_OPTIMAL -> {
+                                FILES_ALREADY_OPTIMAL.incrementAndGet();
+                                StoragePolicyManager.recordRegionRecompressed(p, encodedTargetLevel, 0L);
+                            }
+                            case UNSTABLE_SKIPPED -> {
+                                FILES_UNSTABLE_SKIPPED.incrementAndGet();
+                                noteDecision("hot region skipped", "file=" + p.getFileName(), false);
+                            }
+                            case NO_SIZE_GAIN -> FILES_NO_SIZE_GAIN.incrementAndGet();
+                        }
+                    } catch (InterruptedException e) {
+                        // awaitHeapHeadroom's Thread.sleep, inside recompressFile, was
+                        // interrupted (e.g. server shutdown calling shutdownNow() on the
+                        // executor) - restore the flag and stop, same convention every
+                        // other interrupt handler in this file already follows.
+                        Thread.currentThread().interrupt();
+                    } catch (IOException e) {
+                        FILES_FAILED.incrementAndGet();
+                        LinearRuntime.LOGGER.warn("[LinearReader] Recompression failed for {}: {}",
+                                p.getFileName(), e.getMessage());
+                    } finally {
+                        RECOMPRESS_SLOTS.release();
+                    }
+                });
+
+                // Small pause between KICKING OFF files (not between completions) -
+                // keeps disk/CPU ramp-up gentler even with several files now
+                // compressing concurrently.
+                try {
+                    Thread.sleep(FILE_DELAY_MS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
                 }
             }
+        }
+        // Wait for all in-flight recompression tasks to finish, so logCompletion()'s
+        // final stats reflect everything that actually ran, not just what was
+        // submitted. Note: this only runs on the normal "scanned everything"
+        // completion path - the various early `return`s above (budget exhausted,
+        // interrupted) skip this and may report slightly stale stats, which is fine
+        // since those paths mean "stop now", and the counters are cumulative and
+        // will read correctly on the next status check regardless.
+        try {
+            RECOMPRESS_SLOTS.acquire(PARALLEL_RECOMPRESS_SLOTS);
+            RECOMPRESS_SLOTS.release(PARALLEL_RECOMPRESS_SLOTS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -400,12 +505,9 @@ public final class IdleRecompressor {
     // File-level recompression — package-private so backup logic can use it
     // -------------------------------------------------------------------------
 
-    /**
-     * Recompresses {@code path} in-place at {@link #TARGET_LEVEL}.
-     * Returns bytes saved, or 0 if the file was already at/above target level
-     * or if recompression would make it larger.
-     */
-    static RecompressResult recompressFile(Path path) throws IOException, InterruptedException {
+    static RecompressResult recompressFile(
+            Path path, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality)
+            throws IOException, InterruptedException {
         if (isRegionUnstable(path)) {
             return new RecompressResult(RecompressOutcome.UNSTABLE_SKIPPED, 0L);
         }
@@ -422,22 +524,26 @@ public final class IdleRecompressor {
         if (hdr.getLong(0) != LINEAR_SIGNATURE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
         }
-        if ((header[17] & 0xFF) >= TARGET_LEVEL) {
+        CompressionAlgorithm.Encoded current;
+        try {
+            current = CompressionAlgorithm.decode(header[17] & 0xFF);
+        } catch (IllegalArgumentException e) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
+
+        if (CompressionAlgorithm.isAlreadyAsGoodAs(current, targetAlgorithm, targetLevelOrQuality)) {
             return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
         }
 
         awaitHeapHeadroom(path);
 
         // Full recompression needed — now read the whole file.
-        return recompressFileTo(path, path, TARGET_LEVEL);
+        return recompressFileTo(path, path, targetAlgorithm, targetLevelOrQuality);
     }
 
-    /**
-     * Reads {@code src}, recompresses at {@code targetLevel}, writes atomically to {@code dst}.
-     * {@code src} and {@code dst} may be the same path (in-place).
-     * Returns the outcome and bytes saved.
-     */
-    static RecompressResult recompressFileTo(Path src, Path dst, int targetLevel) throws IOException {
+    static RecompressResult recompressFileTo(
+            Path src, Path dst, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality)
+            throws IOException {
         LinearRegionFile.EncodedLinearFile encoded = LinearRegionFile.readEncodedLinearFile(src);
         if (encoded.headerSignature != LINEAR_SIGNATURE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
@@ -448,51 +554,87 @@ public final class IdleRecompressor {
 
         byte  version    = encoded.version;
         long  newestTs   = encoded.newestTimestamp;
-        byte  curLevel   = encoded.compressionLevel;
         short chunkCount = encoded.chunkCount;
 
-        // For in-place recompression, skip if already at or above target.
-        if (src.equals(dst) && (curLevel & 0xFF) >= targetLevel) {
+        CompressionAlgorithm.Encoded current;
+        try {
+            current = CompressionAlgorithm.decode(encoded.compressionLevel & 0xFF);
+        } catch (IllegalArgumentException e) {
+            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        }
+
+        if (src.equals(dst) && CompressionAlgorithm.isAlreadyAsGoodAs(current, targetAlgorithm, targetLevelOrQuality)) {
             return new RecompressResult(RecompressOutcome.ALREADY_OPTIMAL, 0L);
         }
 
         int compBodyLen = encoded.compressedBodyLength;
         if (compBodyLen <= 0) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
 
-        // Decompress.
-        long expectedDecomp = ZstdSupport.decompressedSize(encoded.compressedBody, 0, compBodyLen);
-        if (expectedDecomp <= 0 || expectedDecomp > Integer.MAX_VALUE) {
+        // Decompress whatever algorithm this file is CURRENTLY stored as -
+        // shares the exact same logic LinearRegionFile's own read path uses,
+        // so the two never drift out of sync with each other.
+        byte[] body;
+        try {
+            body = LinearRegionFile.decompressEncodedLinearFile(src, encoded).bytes;
+        } catch (IOException e) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
         }
 
-        byte[] body = new byte[(int) expectedDecomp];
-        long result = ZstdSupport.decompress(body, 0, body.length, encoded.compressedBody, 0, compBodyLen);
-        if (ZstdSupport.isError(result)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
-
-        // Recompress at target level.
-        int maxCompLen = (int) ZstdSupport.compressBound(body.length);
-        byte[] out = new byte[32 + maxCompLen + 8];
-        long   newLen  = ZstdSupport.compress(out, 32, maxCompLen, body, 0, body.length, targetLevel);
-        if (ZstdSupport.isError(newLen)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
-
-        // For in-place: don't write if it got larger (can happen with already-optimal data).
-        if (src.equals(dst) && newLen >= compBodyLen) {
-            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        // Recompress at the target algorithm/level.
+        byte[] out;
+        int newLen;
+        if (targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI) {
+            byte[] compressed;
+            try {
+                compressed = BrotliSupport.compress(body, targetLevelOrQuality, 24);
+            } catch (RuntimeException e) {
+                LinearRuntime.LOGGER.warn("[LinearReader] Brotli compression failed for {}: {}",
+                        src.getFileName(), e.getMessage(), e);
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            newLen = compressed.length;
+            if (src.equals(dst) && newLen >= compBodyLen) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            out = new byte[32 + newLen + 8];
+            System.arraycopy(compressed, 0, out, 32, newLen);
+        } else {
+            int maxCompLen = (int) ZstdSupport.compressBound(body.length);
+            byte[] outBuf = new byte[32 + maxCompLen + 8];
+            long written = ZstdSupport.compress(outBuf, 32, maxCompLen, body, 0, body.length, targetLevelOrQuality);
+            if (ZstdSupport.isError(written)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            newLen = (int) written;
+            if (src.equals(dst) && newLen >= compBodyLen) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            out = outBuf;
         }
 
         CRC32 crc32 = TL_CRC32.get();
         crc32.reset();
-        crc32.update(out, 32, (int) newLen);
+        crc32.update(out, 32, newLen);
+
+        // Lower 32 bits = real CRC32, as always. For Brotli only, upper 32 bits
+        // store the decompressed body length, since (unlike Zstd) Brotli has no
+        // equivalent embedded content-size the read path can recover on its own.
+        long checksumField = crc32.getValue() & 0xFFFFFFFFL;
+        if (targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI) {
+            checksumField |= ((long) body.length) << 32;
+        }
+
+        byte algorithmByte = targetAlgorithm == CompressionAlgorithm.Algorithm.BROTLI
+                ? CompressionAlgorithm.encodeBrotli(targetLevelOrQuality)
+                : CompressionAlgorithm.encodeZstd(targetLevelOrQuality);
 
         ByteBuffer outBuf = ByteBuffer.wrap(out);
         outBuf.putLong(LINEAR_SIGNATURE);
         outBuf.put(version);
         outBuf.putLong(newestTs);
-        outBuf.put((byte) targetLevel);
+        outBuf.put(algorithmByte);
         outBuf.putShort(chunkCount);
-        outBuf.putInt((int) newLen);
-        outBuf.putLong(crc32.getValue());
-        outBuf.position(32 + (int) newLen);
+        outBuf.putInt(newLen);
+        outBuf.putLong(checksumField);
+        outBuf.position(32 + newLen);
         outBuf.putLong(LINEAR_SIGNATURE);
 
         // Only abort in-place recompression if the region is currently unstable.
@@ -510,7 +652,7 @@ public final class IdleRecompressor {
         // rather than treating it as a live .linear.wip to promote.
         Path wip = dst.resolveSibling(dst.getFileName() + ".recompress.wip");
         try (java.io.OutputStream os = Files.newOutputStream(wip)) {
-            os.write(out, 0, 32 + (int) newLen + 8);
+            os.write(out, 0, 32 + newLen + 8);
         }
         try {
             Files.move(wip, dst,
@@ -520,5 +662,11 @@ public final class IdleRecompressor {
         }
 
         return new RecompressResult(RecompressOutcome.UPGRADED, compBodyLen - (long) newLen);
+    }
+
+    private static CompressionAlgorithm.Algorithm algorithmFromConfigValue(String configValue) {
+        return LinearConfig.BROTLI.equalsIgnoreCase(configValue)
+                ? CompressionAlgorithm.Algorithm.BROTLI
+                : CompressionAlgorithm.Algorithm.ZSTD;
     }
 }

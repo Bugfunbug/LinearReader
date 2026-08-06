@@ -62,9 +62,6 @@ public class LinearRegionFile {
      */
     private static volatile java.util.concurrent.ExecutorService backupExecutor = createBackupExecutor();
 
-    /** Compression level for .bak files — higher than live since write speed is irrelevant. */
-    private static final int BACKUP_COMPRESSION_LEVEL = 22;
-
     // Reusable byte-array buffers per flush thread — dramatically reduces GC pressure
     // under heavy worldgen where flushes happen constantly.
     private static final ThreadLocal<byte[][]> TL_FLUSH_BUFS =
@@ -1032,7 +1029,21 @@ public class LinearRegionFile {
     }
 
     public static void writeBackupCopy(Path linearPath) throws IOException {
-        IdleRecompressor.recompressFileTo(linearPath, backupPathFor(linearPath), BACKUP_COMPRESSION_LEVEL);
+        CompressionAlgorithm.Algorithm backupAlgorithm = resolveBackupAlgorithm();
+        IdleRecompressor.recompressFileTo(
+                linearPath, backupPathFor(linearPath), backupAlgorithm, resolveBackupTargetLevelOrQuality(backupAlgorithm));
+    }
+
+    private static CompressionAlgorithm.Algorithm resolveBackupAlgorithm() {
+        return LinearConfig.BROTLI.equalsIgnoreCase(LinearConfig.getBackupCompressionAlgorithm())
+                ? CompressionAlgorithm.Algorithm.BROTLI
+                : CompressionAlgorithm.Algorithm.ZSTD;
+    }
+
+    private static int resolveBackupTargetLevelOrQuality(CompressionAlgorithm.Algorithm algorithm) {
+        return algorithm == CompressionAlgorithm.Algorithm.BROTLI
+                ? CompressionAlgorithm.BROTLI_QUALITY
+                : CompressionAlgorithm.ZSTD_LEVEL;
     }
 
     private Path bakPath() {
@@ -1051,7 +1062,8 @@ public class LinearRegionFile {
         try {
             getBackupExecutor().submit(() -> {
                 try {
-                    IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
+                    CompressionAlgorithm.Algorithm algorithm = resolveBackupAlgorithm();
+                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm));
                     completeBackupTask(scheduledMutationVersion);
                     LinearRuntime.LOGGER.debug("[LinearReader] Created backup: {}", bak.getFileName());
                 } catch (IOException e) {
@@ -1085,7 +1097,8 @@ public class LinearRegionFile {
         try {
             getBackupExecutor().submit(() -> {
                 try {
-                    IdleRecompressor.recompressFileTo(src, bak, BACKUP_COMPRESSION_LEVEL);
+                    CompressionAlgorithm.Algorithm algorithm = resolveBackupAlgorithm();
+                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm));
                     completeBackupTask(scheduledMutationVersion);
                     LinearRuntime.LOGGER.debug("[LinearReader] Refreshed backup: {} ({} changed chunk(s), {} changed byte(s))",
                             bak.getFileName(), changedChunkCount, changedBytes);
@@ -1273,7 +1286,7 @@ public class LinearRegionFile {
 
         return new ValidationResult(
                 encoded.newestTimestamp,
-                encoded.storedCRC != 0L,
+                (encoded.storedCRC & 0xFFFFFFFFL) != 0L,
                 decompressed,
                 parsedChunkSizes,
                 parsedTimestamps,
@@ -1297,36 +1310,69 @@ public class LinearRegionFile {
             throw new IOException("[LinearReader] Bad footer signature in: " + src);
         }
 
-        long storedCRC = encoded.storedCRC;
-        if (storedCRC != 0L) {
+        // Only the lower 32 bits of this field are ever a real CRC32 - the upper
+        // 32 bits are reused to store a Brotli-compressed file's decompressed
+        // size (see decompressEncodedLinearFile below). Every file ever written
+        // before Brotli support existed has zero in the upper bits already, so
+        // this masking is fully backward compatible.
+        long storedCrc32 = encoded.storedCRC & 0xFFFFFFFFL;
+        if (storedCrc32 != 0L) {
             CRC32 crc = TL_CRC32.get();
             crc.reset();
             crc.update(encoded.compressedBody, 0, encoded.compressedBodyLength);
-            if (crc.getValue() != storedCRC) {
+            if (crc.getValue() != storedCrc32) {
                 throw new IOException("[LinearReader] CRC32 checksum mismatch in: " + src
-                        + " (expected " + storedCRC + ", got " + crc.getValue() + ")");
+                        + " (expected " + storedCrc32 + ", got " + crc.getValue() + ")");
             }
         }
         return System.nanoTime() - verifyStartNs;
     }
 
-    private static DecompressedBody decompressEncodedLinearFile(Path src, EncodedLinearFile encoded) throws IOException {
+    static DecompressedBody decompressEncodedLinearFile(Path src, EncodedLinearFile encoded) throws IOException {
         long decompressStartNs = System.nanoTime();
-        long expectedDecompSize = ZstdSupport.decompressedSize(
-                encoded.compressedBody, 0, encoded.compressedBodyLength);
-        if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE) {
-            throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
+
+        CompressionAlgorithm.Encoded algo;
+        try {
+            algo = CompressionAlgorithm.decode(encoded.compressionLevel & 0xFF);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("[LinearReader] " + e.getMessage() + " in: " + src, e);
         }
 
-        byte[] decompressed = new byte[(int) expectedDecompSize];
-        long result = ZstdSupport.decompress(
-                decompressed, 0, decompressed.length,
-                encoded.compressedBody, 0, encoded.compressedBodyLength);
-        if (ZstdSupport.isError(result)) {
-            throw new IOException("[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
-        }
-        if (result != expectedDecompSize) {
-            throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
+        byte[] decompressed;
+        if (algo.algorithm() == CompressionAlgorithm.Algorithm.BROTLI) {
+            // Brotli has no equivalent to Zstd's embedded frame content-size, so
+            // the real decompressed size is stored in the upper 32 bits of the
+            // outer header's checksum field by whatever wrote this file
+            // (IdleRecompressor.recompressFileTo) - see the CRC masking change
+            // above for why that's safe to reuse.
+            int decompressedSizeHint = (int) (encoded.storedCRC >>> 32);
+            if (decompressedSizeHint <= 0) {
+                throw new IOException(
+                        "[LinearReader] Missing decompressed size for Brotli-compressed file: " + src);
+            }
+            try {
+                decompressed = BrotliSupport.decompress(
+                        encoded.compressedBody, 0, encoded.compressedBodyLength, decompressedSizeHint);
+            } catch (RuntimeException e) {
+                throw new IOException("[LinearReader] Brotli decompression failed in: " + src, e);
+            }
+        } else {
+            long expectedDecompSize = ZstdSupport.decompressedSize(
+                    encoded.compressedBody, 0, encoded.compressedBodyLength);
+            if (expectedDecompSize <= 0 || expectedDecompSize > Integer.MAX_VALUE) {
+                throw new IOException("[LinearReader] Cannot determine decompressed size in: " + src);
+            }
+            decompressed = new byte[(int) expectedDecompSize];
+            long result = ZstdSupport.decompress(
+                    decompressed, 0, decompressed.length,
+                    encoded.compressedBody, 0, encoded.compressedBodyLength);
+            if (ZstdSupport.isError(result)) {
+                throw new IOException(
+                        "[LinearReader] Zstd error (" + ZstdSupport.getErrorName(result) + ") in: " + src);
+            }
+            if (result != expectedDecompSize) {
+                throw new IOException("[LinearReader] Decompressed size mismatch in: " + src);
+            }
         }
         return new DecompressedBody(decompressed, System.nanoTime() - decompressStartNs);
     }
@@ -1357,7 +1403,7 @@ public class LinearRegionFile {
         }
     }
 
-    private static final class DecompressedBody {
+    static final class DecompressedBody {
         final byte[] bytes;
         final long elapsedNs;
 

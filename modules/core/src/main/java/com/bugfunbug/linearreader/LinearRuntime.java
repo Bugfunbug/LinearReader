@@ -16,6 +16,7 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.storage.RegionFile;
+import net.minecraft.server.level.ServerPlayer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -62,6 +63,16 @@ public final class LinearRuntime {
 
     /** World root path — set on server start, used by commands and pin persistence. */
     private static volatile Path worldRoot;
+
+    /**
+     * The currently running server, tracked independently of any single
+     * CommandSourceStack - needed because CommandSourceStack.getServer() can
+     * come back null at the very early moment Minecraft builds the client's
+     * command tree on join (before spawn), which would otherwise wrongly
+     * deny singleplayer-owner access to LinearReader commands at exactly
+     * that moment.
+     */
+    private static volatile MinecraftServer CURRENT_SERVER;
 
     private static final AtomicInteger FLUSH_THREAD_N = new AtomicInteger(0);
     private static final long INTEGRATED_FLUSH_STARTUP_GRACE_NS = 20_000_000_000L;
@@ -395,6 +406,7 @@ public final class LinearRuntime {
     }
 
     public void onServerStarting(MinecraftServer server) {
+        CURRENT_SERVER = server;
         dedicatedServer = server.isDedicatedServer();
         initExecutor();
         StoragePolicyManager.reset(dedicatedServer);
@@ -412,6 +424,7 @@ public final class LinearRuntime {
     }
 
     public void onServerStopping() {
+        CURRENT_SERVER = null;
         IdleRecompressor.shutdown();
         savePins();
         DHPregenMonitor.notifyServerStopping();
@@ -798,6 +811,36 @@ public final class LinearRuntime {
 
     public static boolean hasOperatorCommandPermission(CommandSourceStack source) {
         return minecraftFamily().hasOperatorCommandPermission(source);
+    }
+
+    /**
+     * Returns true if {@code source} may run LinearReader commands.
+     *
+     * On a dedicated server this is identical to {@link #hasOperatorCommandPermission}.
+     * On an integrated (singleplayer/LAN-hosted) server, the world owner is also
+     * allowed even if "Allow Cheats" is off - vanilla only grants the owner
+     * operator level when cheats are enabled, which would otherwise block every
+     * LinearReader command on a cheats-off singleplayer world for no real
+     * security benefit. Anyone else connecting via LAN still needs real
+     * operator permission, same as a dedicated server.
+     */
+    public static boolean hasLinearReaderCommandPermission(CommandSourceStack source) {
+        MinecraftServer server = source.getServer();
+        if (server == null) {
+            // CommandSourceStack.getServer() can be null very early during a client's
+            // join sequence (Minecraft building the command tree before spawn) - fall
+            // back to the server LinearRuntime itself already knows is running, rather
+            // than silently denying the singleplayer-owner special case at exactly that
+            // moment.
+            server = CURRENT_SERVER;
+        }
+        if (server != null
+                && !server.isDedicatedServer()
+                && source.getEntity() instanceof ServerPlayer player
+                && minecraftFamily().isSingleplayerOwner(server, player)) {
+            return true;
+        }
+        return hasOperatorCommandPermission(source);
     }
 
     static record LegacyBackupMigrationResult(int moved, int deduped, int conflicts) {}

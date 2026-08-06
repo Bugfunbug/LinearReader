@@ -7,21 +7,22 @@ import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.linear.IdleRecompressor;
 import com.bugfunbug.linearreader.linear.LinearExporter;
 import com.bugfunbug.linearreader.linear.LinearRegionFile;
+import com.bugfunbug.linearreader.linear.CompressionAlgorithm;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.phys.Vec3;
-import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.DimensionArgument;
+import net.minecraft.server.level.ServerLevel;
 
-import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -32,7 +33,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
-import java.util.stream.Stream;
 
 public final class LinearCommandRegistrar {
 
@@ -72,8 +72,22 @@ public final class LinearCommandRegistrar {
                                         .executes(LinearCommandRegistrar::executeBenchReset)))
                         .then(Commands.literal("afk-compress")
                                 .executes(LinearCommandRegistrar::executeAfkCompressStatus)
-                                .then(Commands.literal("start")
-                                        .executes(LinearCommandRegistrar::executeAfkCompressStart))
+                                .then(Commands.literal("zstd")
+                                        .then(Commands.literal("start")
+                                                .executes(ctx -> executeAfkCompressStart(
+                                                        ctx, CompressionAlgorithm.Algorithm.ZSTD, null))
+                                                .then(Commands.argument("dimension", DimensionArgument.dimension())
+                                                        .executes(ctx -> executeAfkCompressStart(
+                                                                ctx, CompressionAlgorithm.Algorithm.ZSTD,
+                                                                DimensionArgument.getDimension(ctx, "dimension"))))))
+                                .then(Commands.literal("brotli")
+                                        .then(Commands.literal("start")
+                                                .executes(ctx -> executeAfkCompressStart(
+                                                        ctx, CompressionAlgorithm.Algorithm.BROTLI, null))
+                                                .then(Commands.argument("dimension", DimensionArgument.dimension())
+                                                        .executes(ctx -> executeAfkCompressStart(
+                                                                ctx, CompressionAlgorithm.Algorithm.BROTLI,
+                                                                DimensionArgument.getDimension(ctx, "dimension"))))))
                                 .then(Commands.literal("stop")
                                         .executes(LinearCommandRegistrar::executeAfkCompressStop)))
                         .then(Commands.literal("pin")
@@ -104,6 +118,15 @@ public final class LinearCommandRegistrar {
                                     .suggests(LinearCommandRegistrar::suggestGraphArgs)
                                     .executes(LinearCommandRegistrar::executeGraph)))
         );
+    }
+
+    private static String rawArgumentText(CommandContext<CommandSourceStack> ctx, String argumentName) {
+        for (var parsedNode : ctx.getNodes()) {
+            if (parsedNode.getNode().getName().equals(argumentName)) {
+                return parsedNode.getRange().get(ctx.getInput());
+            }
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------------------
@@ -471,10 +494,11 @@ public final class LinearCommandRegistrar {
         String status;
         if (IdleRecompressor.isRunning()) {
             String mode = IdleRecompressor.isManual() ? "manual" : "auto";
-            status = "§a[LinearReader] Recompression running (" + mode + "). "
+            status = "§a[LinearReader] Recompression running (" + mode + ", target: "
+                    + IdleRecompressor.lastTargetDescription() + "). "
                     + "Scanned: §f" + IdleRecompressor.filesScanned()
                     + "§a  Upgraded: §f" + IdleRecompressor.filesRecompressed()
-                    + "§a  Already 22: §f" + IdleRecompressor.filesAlreadyOptimal()
+                    + "§a  Already optimal: §f" + IdleRecompressor.filesAlreadyOptimal()
                     + "§a  Skipped: §f" + IdleRecompressor.filesUnstableSkipped()
                     + "§a  Low-RAM pauses: §f" + IdleRecompressor.lowRamPauses()
                     + "§a  Saved: §f"    + fmtSize(IdleRecompressor.bytesSaved());
@@ -508,13 +532,25 @@ public final class LinearCommandRegistrar {
         return seconds + "s";
     }
 
-    private static int executeAfkCompressStart(CommandContext<CommandSourceStack> ctx) {
-        if (!IdleRecompressor.startManual()) {
+    private static int executeAfkCompressStart(
+            CommandContext<CommandSourceStack> ctx,
+            CompressionAlgorithm.Algorithm algorithm,
+            ServerLevel dimension) throws CommandSyntaxException {
+        Path dimensionFilter = null;
+        if (dimension != null) {
+            Path regionFolder = LinearRuntime.regionFolderForDimension(dimension.dimension());
+            dimensionFilter = regionFolder != null ? regionFolder.getParent() : null;
+        }
+        if (!IdleRecompressor.startManual(algorithm, dimensionFilter)) {
             ctx.getSource().sendFailure(Component.literal("[LinearReader] Recompression is already running."));
             return 0;
         }
+        String algoLabel = algorithm == CompressionAlgorithm.Algorithm.BROTLI ? "Brotli" : "Zstd";
+        String dimensionArg = rawArgumentText(ctx, "dimension");
+        String scopeLabel = dimensionArg != null ? (" (" + dimensionArg + " only)") : " (all dimensions)";
         ctx.getSource().sendSuccess(() -> Component.literal(
-                "§a[LinearReader] Background recompression started. Progress: /linearreader afk-compress"), false);
+                "§a[LinearReader] Background recompression started (" + algoLabel + ")" + scopeLabel
+                        + ". Progress: /linearreader afk-compress"), false);
         return 1;
     }
 

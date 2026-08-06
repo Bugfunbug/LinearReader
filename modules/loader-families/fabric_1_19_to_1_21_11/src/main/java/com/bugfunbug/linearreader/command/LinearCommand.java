@@ -9,10 +9,6 @@ public final class LinearCommand {
     private LinearCommand() {}
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
-        LinearCommandRegistrar.register(dispatcher, LinearCommand::hasOperatorPermission);
-    }
-
-    private static boolean hasOperatorPermission(CommandSourceStack source) {
-        return LinearRuntime.hasOperatorCommandPermission(source);
+        LinearCommandRegistrar.register(dispatcher, LinearRuntime::hasLinearReaderCommandPermission);
     }
 }
