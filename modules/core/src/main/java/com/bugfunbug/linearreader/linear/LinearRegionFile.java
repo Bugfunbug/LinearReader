@@ -691,7 +691,7 @@ public class LinearRegionFile {
                     shouldCreateBackup = !backedUp;
                     changedChunkCount = changedChunksSinceBackup.cardinality();
                     changedBytes = changedBytesSinceBackup;
-                    shouldRefreshBackup = !shouldCreateBackup
+                    boolean normalRefreshDue = !shouldCreateBackup
                             && StoragePolicyManager.shouldRefreshBackup(
                             backedUp,
                             backupRefreshQueued,
@@ -701,6 +701,10 @@ public class LinearRegionFile {
                             lastMutationNs,
                             nowNs
                     );
+                    boolean algorithmMismatch = !shouldCreateBackup
+                            && !backupRefreshQueued
+                            && backupAlgorithmMismatchesConfig(bakPath());
+                    shouldRefreshBackup = normalRefreshDue || algorithmMismatch;
                     scheduledMutationVersion = mutationVersion;
                     if (shouldRefreshBackup) {
                         backupRefreshQueued = true;
@@ -1048,6 +1052,33 @@ public class LinearRegionFile {
 
     private Path bakPath() {
         return backupPathFor(path);
+    }
+
+    /**
+     * True if an existing on-disk backup's compression algorithm no longer
+     * matches what's currently configured - e.g. the user just changed
+     * backupCompressionAlgorithm. Normal backup-refresh thresholds
+     * (StoragePolicyManager.shouldRefreshBackup) only look at how much chunk
+     * data has changed since the last backup, so a pure config change with
+     * no new edits would otherwise never trigger a refresh at all, no matter
+     * how long the server runs.
+     */
+    private static boolean backupAlgorithmMismatchesConfig(Path bak) {
+        if (!Files.exists(bak)) return false;
+        try {
+            byte[] header = new byte[18];
+            try (java.io.InputStream in = Files.newInputStream(bak)) {
+                if (in.read(header) < 18) return false;
+            }
+            CompressionAlgorithm.Encoded current = CompressionAlgorithm.decode(header[17] & 0xFF);
+            CompressionAlgorithm.Algorithm configured =
+                    LinearConfig.BROTLI.equalsIgnoreCase(LinearConfig.getBackupCompressionAlgorithm())
+                            ? CompressionAlgorithm.Algorithm.BROTLI
+                            : CompressionAlgorithm.Algorithm.ZSTD;
+            return current.algorithm() != configured;
+        } catch (IOException | IllegalArgumentException e) {
+            return false; // unreadable/corrupt - other paths already handle that; don't force anything here
+        }
     }
 
     private void createBackupIfAbsent(long scheduledMutationVersion) {
