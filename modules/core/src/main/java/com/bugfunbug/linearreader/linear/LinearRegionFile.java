@@ -515,7 +515,7 @@ public class LinearRegionFile {
             lock.writeLock().unlock();
         }
         if (changed) {
-            StoragePolicyManager.recordChunkWrite(normalizedPath, 0);
+            StoragePolicyManager.recordChunkWriteNormalized(normalizedPath, 0);
         }
     }
 
@@ -557,7 +557,7 @@ public class LinearRegionFile {
                 markDirtyNow();
             }
             if (cleared > 0) {
-                StoragePolicyManager.recordChunkWrite(normalizedPath, 0);
+                StoragePolicyManager.recordChunkWriteNormalized(normalizedPath, 0);
             }
             return cleared;
         } finally {
@@ -593,7 +593,7 @@ public class LinearRegionFile {
         } finally {
             lock.readLock().unlock();
         }
-        StoragePolicyManager.recordChunkRead(normalizedPath);
+        StoragePolicyManager.recordChunkReadNormalized(normalizedPath);
         return dis;
     }
 
@@ -1625,7 +1625,7 @@ public class LinearRegionFile {
         } finally {
             lock.writeLock().unlock();
         }
-        StoragePolicyManager.recordChunkWrite(normalizedPath, newLen);
+        StoragePolicyManager.recordChunkWriteNormalized(normalizedPath, newLen);
     }
 
     private static byte[] compactDirectBufferIfNeeded(byte[] buffer, int size) {

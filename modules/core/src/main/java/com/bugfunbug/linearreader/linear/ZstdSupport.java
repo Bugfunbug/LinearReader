@@ -4,9 +4,9 @@ import com.bugfunbug.linearreader.LinearRuntime;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
@@ -184,23 +184,63 @@ public final class ZstdSupport {
             Class<?> zstdClass = Class.forName("com.github.luben.zstd.Zstd", true, loader);
             Class<?> compressCtxClass = Class.forName("com.github.luben.zstd.ZstdCompressCtx", true, loader);
             Class<?> decompressCtxClass = Class.forName("com.github.luben.zstd.ZstdDecompressCtx", true, loader);
+
+            MethodHandles.Lookup lookup = MethodHandles.publicLookup();
+
+            MethodHandle compressBoundHandle = lookup.unreflect(
+                            zstdClass.getMethod("compressBound", long.class))
+                    .asType(MethodType.methodType(long.class, long.class));
+            MethodHandle decompressedSizeHandle = lookup.unreflect(
+                            zstdClass.getMethod("decompressedSize", byte[].class))
+                    .asType(MethodType.methodType(long.class, byte[].class));
+            MethodHandle decompressedSizeSliceHandle = lookup.unreflect(
+                            zstdClass.getMethod("decompressedSize", byte[].class, int.class, int.class))
+                    .asType(MethodType.methodType(long.class, byte[].class, int.class, int.class));
+            MethodHandle isErrorHandle = lookup.unreflect(
+                            zstdClass.getMethod("isError", long.class))
+                    .asType(MethodType.methodType(boolean.class, long.class));
+            MethodHandle getErrorNameHandle = lookup.unreflect(
+                            zstdClass.getMethod("getErrorName", long.class))
+                    .asType(MethodType.methodType(String.class, long.class));
+
+            MethodHandle compressCtxCtorHandle = lookup.unreflectConstructor(
+                            compressCtxClass.getConstructor())
+                    .asType(MethodType.methodType(Object.class));
+            MethodHandle compressCtxSetLevelHandle = lookup.unreflect(
+                            compressCtxClass.getMethod("setLevel", int.class))
+                    .asType(MethodType.methodType(void.class, Object.class, int.class));
+            MethodHandle compressCtxCompressByteArrayHandle = lookup.unreflect(
+                            compressCtxClass.getMethod("compressByteArray",
+                                    byte[].class, int.class, int.class,
+                                    byte[].class, int.class, int.class))
+                    .asType(MethodType.methodType(long.class, Object.class,
+                            byte[].class, int.class, int.class,
+                            byte[].class, int.class, int.class));
+
+            MethodHandle decompressCtxCtorHandle = lookup.unreflectConstructor(
+                            decompressCtxClass.getConstructor())
+                    .asType(MethodType.methodType(Object.class));
+            MethodHandle decompressCtxDecompressByteArrayHandle = lookup.unreflect(
+                            decompressCtxClass.getMethod("decompressByteArray",
+                                    byte[].class, int.class, int.class,
+                                    byte[].class, int.class, int.class))
+                    .asType(MethodType.methodType(long.class, Object.class,
+                            byte[].class, int.class, int.class,
+                            byte[].class, int.class, int.class));
+
             LinearRuntime.LOGGER.debug("[LinearReader] Loaded embedded zstd-jni from {}.", extractedJar);
             return new Bridge(
                     loader,
-                    zstdClass.getMethod("compressBound", long.class),
-                    zstdClass.getMethod("decompressedSize", byte[].class),
-                    zstdClass.getMethod("decompressedSize", byte[].class, int.class, int.class),
-                    zstdClass.getMethod("isError", long.class),
-                    zstdClass.getMethod("getErrorName", long.class),
-                    compressCtxClass.getConstructor(),
-                    compressCtxClass.getMethod("setLevel", int.class),
-                    compressCtxClass.getMethod("compressByteArray",
-                            byte[].class, int.class, int.class,
-                            byte[].class, int.class, int.class),
-                    decompressCtxClass.getConstructor(),
-                    decompressCtxClass.getMethod("decompressByteArray",
-                            byte[].class, int.class, int.class,
-                            byte[].class, int.class, int.class)
+                    compressBoundHandle,
+                    decompressedSizeHandle,
+                    decompressedSizeSliceHandle,
+                    isErrorHandle,
+                    getErrorNameHandle,
+                    compressCtxCtorHandle,
+                    compressCtxSetLevelHandle,
+                    compressCtxCompressByteArrayHandle,
+                    decompressCtxCtorHandle,
+                    decompressCtxDecompressByteArrayHandle
             );
         } catch (ReflectiveOperationException | IOException e) {
             throw new IllegalStateException("[LinearReader] Failed to initialize embedded zstd-jni runtime.", e);
@@ -231,47 +271,51 @@ public final class ZstdSupport {
     private static final class Bridge {
         @SuppressWarnings("unused")
         private final URLClassLoader loader;
-        private final Method compressBound;
-        private final Method decompressedSize;
-        private final Method decompressedSizeSlice;
-        private final Method isError;
-        private final Method getErrorName;
-        private final Constructor<?> compressCtxCtor;
-        private final Method compressCtxSetLevel;
-        private final Method compressCtxCompressByteArray;
-        private final Constructor<?> decompressCtxCtor;
-        private final Method decompressCtxDecompressByteArray;
+        private final MethodHandle compressBoundHandle;
+        private final MethodHandle decompressedSizeHandle;
+        private final MethodHandle decompressedSizeSliceHandle;
+        private final MethodHandle isErrorHandle;
+        private final MethodHandle getErrorNameHandle;
+        private final MethodHandle compressCtxCtorHandle;
+        private final MethodHandle compressCtxSetLevelHandle;
+        private final MethodHandle compressCtxCompressByteArrayHandle;
+        private final MethodHandle decompressCtxCtorHandle;
+        private final MethodHandle decompressCtxDecompressByteArrayHandle;
         private final ThreadLocal<CompressContextState> compressContexts;
         private final ThreadLocal<Object> decompressContexts;
 
         private Bridge(URLClassLoader loader,
-                       Method compressBound,
-                       Method decompressedSize,
-                       Method decompressedSizeSlice,
-                       Method isError,
-                       Method getErrorName,
-                       Constructor<?> compressCtxCtor,
-                       Method compressCtxSetLevel,
-                       Method compressCtxCompressByteArray,
-                       Constructor<?> decompressCtxCtor,
-                       Method decompressCtxDecompressByteArray) {
+                       MethodHandle compressBoundHandle,
+                       MethodHandle decompressedSizeHandle,
+                       MethodHandle decompressedSizeSliceHandle,
+                       MethodHandle isErrorHandle,
+                       MethodHandle getErrorNameHandle,
+                       MethodHandle compressCtxCtorHandle,
+                       MethodHandle compressCtxSetLevelHandle,
+                       MethodHandle compressCtxCompressByteArrayHandle,
+                       MethodHandle decompressCtxCtorHandle,
+                       MethodHandle decompressCtxDecompressByteArrayHandle) {
             this.loader = loader;
-            this.compressBound = compressBound;
-            this.decompressedSize = decompressedSize;
-            this.decompressedSizeSlice = decompressedSizeSlice;
-            this.isError = isError;
-            this.getErrorName = getErrorName;
-            this.compressCtxCtor = compressCtxCtor;
-            this.compressCtxSetLevel = compressCtxSetLevel;
-            this.compressCtxCompressByteArray = compressCtxCompressByteArray;
-            this.decompressCtxCtor = decompressCtxCtor;
-            this.decompressCtxDecompressByteArray = decompressCtxDecompressByteArray;
+            this.compressBoundHandle = compressBoundHandle;
+            this.decompressedSizeHandle = decompressedSizeHandle;
+            this.decompressedSizeSliceHandle = decompressedSizeSliceHandle;
+            this.isErrorHandle = isErrorHandle;
+            this.getErrorNameHandle = getErrorNameHandle;
+            this.compressCtxCtorHandle = compressCtxCtorHandle;
+            this.compressCtxSetLevelHandle = compressCtxSetLevelHandle;
+            this.compressCtxCompressByteArrayHandle = compressCtxCompressByteArrayHandle;
+            this.decompressCtxCtorHandle = decompressCtxCtorHandle;
+            this.decompressCtxDecompressByteArrayHandle = decompressCtxDecompressByteArrayHandle;
             this.compressContexts = ThreadLocal.withInitial(this::newCompressContextState);
             this.decompressContexts = ThreadLocal.withInitial(this::newDecompressContext);
         }
 
         private long compressBound(long srcSize) {
-            return invokeStaticLong(compressBound, srcSize);
+            try {
+                return (long) compressBoundHandle.invokeExact(srcSize);
+            } catch (Throwable t) {
+                throw wrap("compressBound", t);
+            }
         }
 
         private long compress(byte[] dst, byte[] src, int level) {
@@ -281,16 +325,28 @@ public final class ZstdSupport {
         private long compress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level) {
             CompressContextState state = compressContexts.get();
             state.applyLevel(level);
-            return invokeInstanceLong(state.context, compressCtxCompressByteArray,
-                    dst, dstOff, dstLen, src, srcOff, srcLen);
+            try {
+                return (long) compressCtxCompressByteArrayHandle.invokeExact(
+                        state.context, dst, dstOff, dstLen, src, srcOff, srcLen);
+            } catch (Throwable t) {
+                throw wrap("compressByteArray", t);
+            }
         }
 
         private long decompressedSize(byte[] src) {
-            return invokeStaticLong(decompressedSize, src);
+            try {
+                return (long) decompressedSizeHandle.invokeExact(src);
+            } catch (Throwable t) {
+                throw wrap("decompressedSize", t);
+            }
         }
 
         private long decompressedSize(byte[] src, int srcOff, int srcLen) {
-            return invokeStaticLong(decompressedSizeSlice, src, srcOff, srcLen);
+            try {
+                return (long) decompressedSizeSliceHandle.invokeExact(src, srcOff, srcLen);
+            } catch (Throwable t) {
+                throw wrap("decompressedSize", t);
+            }
         }
 
         private long decompress(byte[] dst, byte[] src) {
@@ -298,59 +354,49 @@ public final class ZstdSupport {
         }
 
         private long decompress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen) {
-            return invokeInstanceLong(decompressContexts.get(), decompressCtxDecompressByteArray,
-                    dst, dstOff, dstLen, src, srcOff, srcLen);
+            Object context = decompressContexts.get();
+            try {
+                return (long) decompressCtxDecompressByteArrayHandle.invokeExact(
+                        context, dst, dstOff, dstLen, src, srcOff, srcLen);
+            } catch (Throwable t) {
+                throw wrap("decompressByteArray", t);
+            }
         }
 
         private boolean isError(long code) {
-            return invokeStaticBoolean(isError, code);
+            try {
+                return (boolean) isErrorHandle.invokeExact(code);
+            } catch (Throwable t) {
+                throw wrap("isError", t);
+            }
         }
 
         private String getErrorName(long code) {
-            return invokeStaticString(getErrorName, code);
+            try {
+                return (String) getErrorNameHandle.invokeExact(code);
+            } catch (Throwable t) {
+                throw wrap("getErrorName", t);
+            }
         }
 
         private CompressContextState newCompressContextState() {
-            return new CompressContextState(newInstance(compressCtxCtor));
+            try {
+                return new CompressContextState(compressCtxCtorHandle.invokeExact());
+            } catch (Throwable t) {
+                throw wrap("ZstdCompressCtx constructor", t);
+            }
         }
 
         private Object newDecompressContext() {
-            return newInstance(decompressCtxCtor);
-        }
-
-        private static long invokeStaticLong(Method method, Object... args) {
-            return ((Number) invoke(null, method, args)).longValue();
-        }
-
-        private static long invokeInstanceLong(Object target, Method method, Object... args) {
-            return ((Number) invoke(target, method, args)).longValue();
-        }
-
-        private static boolean invokeStaticBoolean(Method method, Object... args) {
-            return (Boolean) invoke(null, method, args);
-        }
-
-        private static String invokeStaticString(Method method, Object... args) {
-            return (String) invoke(null, method, args);
-        }
-
-        private static Object newInstance(Constructor<?> constructor) {
             try {
-                return constructor.newInstance();
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException("[LinearReader] Could not create embedded zstd-jni context " + constructor.getDeclaringClass().getSimpleName() + ".", e);
+                return decompressCtxCtorHandle.invokeExact();
+            } catch (Throwable t) {
+                throw wrap("ZstdDecompressCtx constructor", t);
             }
         }
 
-        private static Object invoke(Object target, Method method, Object... args) {
-            try {
-                return method.invoke(target, args);
-            } catch (IllegalAccessException e) {
-                throw new IllegalStateException("[LinearReader] Could not access embedded zstd-jni method " + method.getName() + ".", e);
-            } catch (InvocationTargetException e) {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                throw new IllegalStateException("[LinearReader] Embedded zstd-jni call failed: " + method.getName() + ".", cause);
-            }
+        private static IllegalStateException wrap(String what, Throwable cause) {
+            return new IllegalStateException("[LinearReader] Embedded zstd-jni call failed: " + what + ".", cause);
         }
 
         private final class CompressContextState {
@@ -363,7 +409,11 @@ public final class ZstdSupport {
 
             private void applyLevel(int nextLevel) {
                 if (level == nextLevel) return;
-                invoke(context, compressCtxSetLevel, nextLevel);
+                try {
+                    compressCtxSetLevelHandle.invokeExact(context, nextLevel);
+                } catch (Throwable t) {
+                    throw wrap("setLevel", t);
+                }
                 level = nextLevel;
             }
         }

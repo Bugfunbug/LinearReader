@@ -252,6 +252,33 @@ public final class StoragePolicyManager {
         regionActivity(regionPath).noteWrite(nowNs, bytesWritten);
     }
 
+    /**
+     * Same as {@link #recordChunkRead(Path)}, but skips {@code toAbsolutePath().normalize()}
+     * because the caller (LinearRegionFile) already has a normalized path cached from its
+     * constructor. This is the hottest call site in the mod (every chunk read), so avoiding
+     * the redundant re-normalization matters here even though it's a no-op elsewhere.
+     */
+    public static void recordChunkReadNormalized(Path normalizedRegionPath) {
+        recordChunkReadAtNormalized(normalizedRegionPath, nowNs());
+    }
+
+    static void recordChunkReadAtNormalized(Path normalizedRegionPath, long nowNs) {
+        CHUNK_READS.increment();
+        LAST_CHUNK_IO_NS.set(nowNs);
+        regionActivityNormalized(normalizedRegionPath).noteRead(nowNs);
+    }
+
+    /** See {@link #recordChunkReadNormalized(Path)} — same idea, for writes. */
+    public static void recordChunkWriteNormalized(Path normalizedRegionPath, int bytesWritten) {
+        recordChunkWriteAtNormalized(normalizedRegionPath, bytesWritten, nowNs());
+    }
+
+    static void recordChunkWriteAtNormalized(Path normalizedRegionPath, int bytesWritten, long nowNs) {
+        CHUNK_WRITES.increment();
+        LAST_CHUNK_IO_NS.set(nowNs);
+        regionActivityNormalized(normalizedRegionPath).noteWrite(nowNs, bytesWritten);
+    }
+
     public static void recordRegionFlush(Path regionPath, long flushNs,
                                          long uncompressedBytes, long compressedBytes,
                                          int compressionLevel) {
@@ -1020,6 +1047,10 @@ public final class StoragePolicyManager {
         return REGION_ACTIVITY.computeIfAbsent(normalize(regionPath), ignored -> new RegionActivity());
     }
 
+    private static RegionActivity regionActivityNormalized(Path normalizedRegionPath) {
+        return REGION_ACTIVITY.computeIfAbsent(normalizedRegionPath, ignored -> new RegionActivity());
+    }
+
     private static Path normalize(Path regionPath) {
         return regionPath.toAbsolutePath().normalize();
     }
@@ -1206,17 +1237,22 @@ public final class StoragePolicyManager {
                     && heat < 0.10D;
         }
 
+        /** Below this gap, skip the exp() decay entirely — it'll be applied (correctly,
+         *  since exp(-a-b) == exp(-a)*exp(-b)) on the next call once enough time has passed. */
+        private static final long DECAY_MIN_INTERVAL_NS = 50_000_000L; // 50ms
+
         private void decayLocked(long nowNs) {
             if (lastUpdateNs == 0L) {
                 lastUpdateNs = nowNs;
                 return;
             }
             long elapsedNs = nowNs - lastUpdateNs;
-            if (elapsedNs <= 0L) {
+            if (elapsedNs < DECAY_MIN_INTERVAL_NS) {
                 return;
             }
-            heat *= Math.exp(-elapsedNs / (double) REGION_HEAT_DECAY_NS);
-            compressionDebt *= Math.exp(-elapsedNs / (double) REGION_HEAT_DECAY_NS);
+            double decay = Math.exp(-elapsedNs / (double) REGION_HEAT_DECAY_NS);
+            heat *= decay;
+            compressionDebt *= decay;
             lastUpdateNs = nowNs;
         }
     }
