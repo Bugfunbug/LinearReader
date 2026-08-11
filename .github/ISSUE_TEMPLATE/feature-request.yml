@@ -2,7 +2,6 @@ name: Feature Request
 description: Suggest a new feature or improvement for LinearReader.
 title: "Feature Request: "
 labels: ["enhancement"]
-type: feature
 body:
   - type: markdown
     attributes:
