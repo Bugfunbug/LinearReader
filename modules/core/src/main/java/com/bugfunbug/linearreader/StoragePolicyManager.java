@@ -1208,8 +1208,12 @@ public final class StoragePolicyManager {
                 // raw ">= TARGET_LEVEL" comparison this replaced was Zstd-only and wrongly
                 // flagged any Brotli-encoded byte (always > 22) as "already at max"
                 // regardless of Brotli quality actually achieved.
-                compressionDebt = Math.min(compressionDebt,
-                        computeCompressionDebt(bytesSaved, Math.max(1L, bytesSaved), compressionLevel));
+                //
+                // Assign directly rather than Math.min-ing against the prior value: a
+                // fresh RegionActivity starts at compressionDebt == 0.0, and min()'d
+                // against that would permanently clamp debt to 0 for any region whose
+                // first-ever signal is a recompress rather than a flush.
+                compressionDebt = computeCompressionDebt(bytesSaved, Math.max(1L, bytesSaved), compressionLevel);
             }
             lastSeenNs = nowNs;
             lastFlushNs = nowNs;

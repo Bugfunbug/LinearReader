@@ -97,8 +97,8 @@ public final class LinearConfig {
             boolean bulkConvertOnLoad,
             int     pruneMaxInhabitedTimeTicks,
             int     pruneMinRegionQuietHours,
-            String  backupCompressionAlgorithm,
-            String  idleRecompressAlgorithm) {
+            String  idleRecompressAlgorithm,
+            String  backupCompressionAlgorithm) {
 
         LinearConfig.compressionLevel     = compressionLevel;
         LinearConfig.regionCacheSize      = regionCacheSize;
@@ -120,8 +120,8 @@ public final class LinearConfig {
         LinearConfig.bulkConvertOnLoad = bulkConvertOnLoad;
         LinearConfig.pruneMaxInhabitedTimeTicks = Math.max(0, pruneMaxInhabitedTimeTicks);
         LinearConfig.pruneMinRegionQuietHours = Math.max(0, pruneMinRegionQuietHours);
-        LinearConfig.backupCompressionAlgorithm = normalizeAlgorithm(backupCompressionAlgorithm);
         LinearConfig.idleRecompressAlgorithm = normalizeAlgorithm(idleRecompressAlgorithm);
+        LinearConfig.backupCompressionAlgorithm = normalizeAlgorithm(backupCompressionAlgorithm);
     }
 
     /**
