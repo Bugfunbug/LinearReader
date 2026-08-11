@@ -81,8 +81,8 @@ body:
     attributes:
       label: Does this issue occur with only LinearReader installed
       options:
-        - Yes
-        - No (see below)
+        - "Yes"
+        - "No (see below)"
     validations:
       required: true
   - type: textarea
