@@ -114,14 +114,14 @@ public final class IdleRecompressor {
 
     public static String lastTargetDescription() { return lastTargetDescription; }
 
-    private enum RecompressOutcome {
+    enum RecompressOutcome {
         UPGRADED,
         ALREADY_OPTIMAL,
         UNSTABLE_SKIPPED,
         NO_SIZE_GAIN
     }
 
-    private record RecompressResult(RecompressOutcome outcome, long bytesSaved) {}
+    record RecompressResult(RecompressOutcome outcome, long bytesSaved) {}
 
     // -------------------------------------------------------------------------
     // Called from RegionFileStorageMixin

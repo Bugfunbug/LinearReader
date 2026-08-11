@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader;
 
 import com.bugfunbug.linearreader.config.LinearConfig;
+import com.bugfunbug.linearreader.linear.CompressionAlgorithm;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class StoragePolicyManagerTest {
 
@@ -375,5 +377,74 @@ class StoragePolicyManagerTest {
         assertTrue(pinnedSnapshot.pinnedRegionCount() >= 32);
         assertTrue(pinnedSnapshot.residentHotSet() < busySnapshot.residentHotSet());
         assertTrue(pinnedSnapshot.residentTargetBytes() <= busySnapshot.residentTargetBytes());
+    }
+
+    @Test
+    void brotli11RegionRecompressionFullyRepaysDebtRegardlessOfConfiguredIdleTarget() {
+        StoragePolicyManager.reset(true);
+
+        long startNs = 1_000_000_000L;
+        Path region = Path.of("/tmp/r.7.0.linear");
+
+        StoragePolicyManager.setTestNowNs(startNs);
+        StoragePolicyManager.onServerTick(0, 0);
+
+        // A low-effort Zstd flush (mirroring a real live write) always leaves
+        // some debt, exactly like tracksAndRepaysMaintenanceDebtForLowCompressionRegions
+        // above already confirms for the Zstd-only case.
+        StoragePolicyManager.setTestNowNs(startNs + 50_000_000L);
+        StoragePolicyManager.recordRegionFlush(region, 120_000_000L, 4L * 1024L * 1024L,
+                1L * 1024L * 1024L, 2);
+        StoragePolicyManager.onServerTick(0, 0);
+        double debtAfterLowZstdFlush = StoragePolicyManager.maintenanceDebtScore();
+        assertTrue(debtAfterLowZstdFlush > 0.0D);
+
+        // Recompressing that SAME region to Brotli quality 11 - passed as the
+        // real ENCODED header byte, matching exactly what IdleRecompressor's
+        // fixed call site does in production - must fully repay the debt, the
+        // same way recompressing to Zstd 22 already does above.
+        int encodedBrotli11 = CompressionAlgorithm.encodeBrotli(CompressionAlgorithm.BROTLI_QUALITY) & 0xFF;
+        StoragePolicyManager.setTestNowNs(startNs + 100_000_000L);
+        StoragePolicyManager.recordRegionRecompressed(region, encodedBrotli11, 512_000L);
+        StoragePolicyManager.onServerTick(0, 0);
+        double debtAfterBrotliRecompress = StoragePolicyManager.maintenanceDebtScore();
+
+        assertTrue(debtAfterBrotliRecompress < debtAfterLowZstdFlush);
+        assertEquals(0.0D, debtAfterBrotliRecompress, 0.0001D,
+                "a region genuinely recompressed to Brotli quality 11 must show zero remaining debt");
+    }
+
+    /**
+     * Regression trap, not a "correct behavior" test: this documents the exact
+     * bug caught during manual review by proving it WOULD still misbehave if
+     * IdleRecompressor's fix were ever reverted. Passing the bare Brotli
+     * quality number (11) instead of the properly ENCODED header byte (111)
+     * makes it look like a mediocre Zstd level to the decoder, producing real
+     * nonzero "debt" for a region that is actually already at the best
+     * possible compression. If this assertion ever starts failing, it means
+     * someone accidentally fixed the encoding bug from the wrong end (inside
+     * computeCompressionDebt) rather than at the actual call site - worth
+     * investigating either way, not just re-enabling this test.
+     */
+    @Test
+    void passingBareBrotliQualityInsteadOfEncodedByteWouldShowWrongNonzeroDebt() {
+        StoragePolicyManager.reset(true);
+
+        long startNs = 1_000_000_000L;
+        Path region = Path.of("/tmp/r.8.0.linear");
+
+        StoragePolicyManager.setTestNowNs(startNs);
+        StoragePolicyManager.onServerTick(0, 0);
+
+        StoragePolicyManager.setTestNowNs(startNs + 50_000_000L);
+        // Deliberately the bare quality number, NOT the encoded byte - this is
+        // the exact bug, reproduced on purpose.
+        StoragePolicyManager.recordRegionRecompressed(region, CompressionAlgorithm.BROTLI_QUALITY, 512_000L);
+        StoragePolicyManager.onServerTick(0, 0);
+
+        double debtWithBareBrotliQuality = StoragePolicyManager.maintenanceDebtScore();
+        assertTrue(debtWithBareBrotliQuality > 0.0D,
+                "documents why IdleRecompressor MUST pass the ENCODED byte, not the bare quality number - "
+                        + "this nonzero value IS the bug, reproduced deliberately");
     }
 }
