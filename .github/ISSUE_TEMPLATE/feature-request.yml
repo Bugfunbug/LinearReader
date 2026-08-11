@@ -1,0 +1,35 @@
+name: Feature Request
+description: Suggest a new feature or improvement for LinearReader.
+title: "Feature Request: "
+labels: ["enhancement"]
+type: feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to give me ideas for what to add to LinearReader!  
+        Please keep in mind that LinearReader is in maintenance mode at the moment, so requested features are not guaranteed to be implemented.
+  - type: textarea
+    id: feature
+    attributes:
+      label: What's your idea?
+      description: Describe the feature or improvement you thought of.
+      placeholder: Lay it on me.
+    validations:
+      required: true
+  - type: textarea
+    id: reasoning
+    attributes:
+      label: Why should this be added?
+      description: Tell me what problem this idea solves or how it is an improvement.
+      placeholder: What's the use?
+    validations:
+      required: true
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else?
+      description: Got any more information, examples, or ideas in that brain of yours that you'd like to share?
+      placeholder: Tell me about it...
+    validations:
+      required: false

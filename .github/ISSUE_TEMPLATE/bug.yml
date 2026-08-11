@@ -1,0 +1,128 @@
+name: Bug Report
+description: File a bug report.
+title: "Bug Report: "
+labels: ["bug"]
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to fill out this bug report!  
+        Please fill out the relevant fields below.
+  - type: dropdown
+    id: minecraft-version
+    attributes:
+      label: Minecraft Version
+      description: What version of Minecraft are you playing?
+      options:
+        - 1.20
+        - 1.20.1
+        - 1.20.2
+        - 1.20.3
+        - 1.20.4
+        - 1.20.5
+        - 1.20.6
+        - 1.21
+        - 1.21.1
+        - 1.21.2
+        - 1.21.3
+        - 1.21.4
+        - 1.21.5
+        - 1.21.6
+        - 1.21.7
+        - 1.21.8
+        - 1.21.9
+        - 1.21.10
+        - 1.21.11
+        - 26.1
+        - 26.1.1
+        - 26.1.2
+        - 26.2
+    validations:
+      required: true
+  - type: dropdown
+    id: loader
+    attributes:
+      label: Mod Loader
+      description: What mod loader are you running?
+      options:
+        - Forge
+        - Fabric
+        - NeoForge
+    validations:
+      required: true
+  - type: dropdown
+    id: linearreader-version
+    attributes:
+      label: LinearReader Version
+      description: What version of LinearReader are you using?
+      options:
+        - 1.0.0
+        - 1.0.1
+        - 1.1.0
+        - 1.1.1
+        - 1.1.2
+        - 1.1.3
+        - 1.1.4
+        - 1.2.0
+        - 1.2.0.1
+        - 1.2.1
+        - 1.3.0
+    validations:
+      required: true
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: What's the issue?
+      placeholder: Please, do tell!
+    validations:
+      required: true
+  - type: dropdown
+    id: only-linearreader
+    attributes:
+      label: Does this issue occur with only LinearReader installed
+      options:
+        - Yes
+        - No (see below)
+    validations:
+      required: true
+  - type: textarea
+    id: mod-list
+    attributes:
+      label: List the other mods (and their versions) that must be installed for this bug to occur.
+      description: Try to slim the list down if you can, I'd appreciate it. Download links are also appreciated, especially for uncommon mods.
+      placeholder: List away...
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How did this happen?
+      placeholder: And how can I do it again?
+    validations:
+      required: true
+  - type: input
+    id: logs
+    attributes:
+      label: And the logs too, please.
+      description: If relevant, please upload your latest log to [mclo.gs](https://mclo.gs) and provide the link to it.
+      placeholder: Paste mclo.gs link here
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have looked through the existing issues and this has not been reported already.
+          required: true
+        - label: I am using the correct LinearReader file for my mod loader and Minecraft version combination.
+          required: true
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else?
+      description: Go for it.
+      placeholder: I'm all ears.
+    validations:
+      required: false
