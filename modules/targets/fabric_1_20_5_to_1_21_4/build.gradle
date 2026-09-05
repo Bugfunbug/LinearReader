@@ -1,0 +1,187 @@
+import java.util.Properties
+
+plugins {
+    id 'fabric-loom' version '1.13.2'
+    id 'maven-publish'
+}
+
+def targetProperties = new Properties()
+file('gradle.properties').withInputStream(targetProperties.&load)
+
+def targetProperty = { String name ->
+    def value = targetProperties.getProperty(name)
+    if (value == null) {
+        throw new GradleException("Missing target property '${name}' in ${projectDir}/gradle.properties")
+    }
+    value
+}
+
+def minecraftVersion = targetProperty('minecraft_version')
+def minecraftVersionRangeLabel = targetProperty('minecraft_version_range_label')
+def loaderVersion = targetProperty('loader_version')
+def fabricVersion = targetProperty('fabric_version')
+def fabricLoaderDependencyRange = targetProperty('fabric_loader_dependency_range')
+def minecraftDependencyRange = targetProperty('minecraft_dependency_range')
+def zstdVersion = targetProperty('zstd_version')
+def brotliVersion = targetProperty('brotli_version')
+def modId = targetProperty('mod_id')
+
+version = targetProperty('mod_version')
+group = targetProperty('mod_group_id')
+
+def artifactStem = "${modId}-${project.version}-fabric-${minecraftVersionRangeLabel}"
+
+base {
+    archivesName = modId + '-fabric'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+sourceSets {
+    main {
+        java.srcDir rootProject.file('modules/core/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-api/src/main/java')
+        java.srcDir rootProject.file('modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/src/main/java')
+        java.srcDir rootProject.file('modules/loader-families/fabric_1_19_to_1_21_11/src/main/java')
+        java.srcDir rootProject.file('modules/targets/src/main/java')
+    }
+    test {
+        java.srcDir rootProject.file('modules/core-testkit/src/test/java')
+        resources.srcDir rootProject.file('modules/core-testkit/src/test/resources')
+    }
+}
+
+loom {
+    mixin {
+        defaultRefmapName = 'linearreader.refmap.json'
+    }
+}
+
+configurations {
+    zstdRuntime
+    brotliRuntime
+}
+
+repositories {
+    mavenCentral()
+    maven { url = "https://maven.terraformersmc.com/" }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraftVersion}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${loaderVersion}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabricVersion}"
+    modImplementation "com.terraformersmc:modmenu:${project.modmenu_version}"
+    compileOnly 'org.jetbrains:annotations:24.0.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+
+    zstdRuntime "com.github.luben:zstd-jni:${zstdVersion}"
+    testRuntimeOnly "com.github.luben:zstd-jni:${zstdVersion}"
+
+    brotliRuntime "com.aayushatharva.brotli4j:brotli4j:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-linux-aarch64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-windows-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-x86_64:${brotliVersion}"
+    brotliRuntime "com.aayushatharva.brotli4j:native-osx-aarch64:${brotliVersion}"
+}
+
+processResources {
+    inputs.property 'version', project.version
+    inputs.property 'minecraft_version', minecraftVersion
+    inputs.property 'loader_version', loaderVersion
+    inputs.property 'fabric_loader_dependency_range', fabricLoaderDependencyRange
+    inputs.property 'minecraft_dependency_range', minecraftDependencyRange
+
+    filteringCharset 'UTF-8'
+    filesMatching('fabric.mod.json') {
+        expand(
+                version: project.version,
+                minecraft_version: minecraftVersion,
+                loader_version: loaderVersion,
+                fabric_loader_dependency_range: fabricLoaderDependencyRange,
+                minecraft_dependency_range: minecraftDependencyRange
+        )
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
+    }
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
+    }
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214Family.java')
+    }
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('processTestResources', ProcessResources).configure {
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+    from(configurations.brotliRuntime) {
+        into 'META-INF/linearreader-libs'
+    }
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}
+
+tasks.named('jar', Jar).configure {
+    archiveFileName.set("${artifactStem}-dev.jar")
+}
+
+tasks.named('sourcesJar', Jar).configure {
+    archiveFileName.set("${artifactStem}-sources-dev.jar")
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java')
+    }
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214RegionStorageHooks.java')
+    }
+    exclude { details ->
+        details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_20_2_to_1_21_4/src/main/java/com/bugfunbug/linearreader/mc1202to1214/Minecraft1202To1214Family.java')
+    }
+}
+
+tasks.named('remapJar').configure {
+    archiveFileName.set("${artifactStem}.jar")
+}
+
+tasks.named('remapSourcesJar').configure {
+    archiveFileName.set("${artifactStem}-sources.jar")
+}
+
+jar {
+    from(rootProject.file('LICENSE')) {
+        rename { 'LICENSE.txt' }
+        into '/'
+    }
+    from(rootProject.file('README.md')) { into '/' }
+
+    from(configurations.zstdRuntime) {
+        into 'META-INF/linearreader-libs'
+        rename { 'zstd-jni.jar' }
+    }
+    from(configurations.brotliRuntime) {
+        into 'META-INF/linearreader-libs'
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

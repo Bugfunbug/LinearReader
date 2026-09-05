@@ -17,7 +17,8 @@ def requireIncludedTarget = { String label, Project target ->
 }
 
 def fabric1201Target = targetOrNull(':targets:fabric_1_20_to_1_20_1')
-def fabric1202To1214Target = targetOrNull(':targets:fabric_1_20_2_to_1_21_4')
+def fabric1202To1204Target = targetOrNull(':targets:fabric_1_20_2_to_1_20_4')
+def fabric1205To1214Target = targetOrNull(':targets:fabric_1_20_5_to_1_21_4')
 def fabric1215To12110Target = targetOrNull(':targets:fabric_1_21_5_to_1_21_10')
 def fabric12111Target = targetOrNull(':targets:fabric_1_21_11')
 def fabric261To262Target = targetOrNull(':targets:fabric_26_1_to_26_2')
@@ -39,7 +40,8 @@ def neoforge261To262Target = targetOrNull(':targets:neoforge_26_1_to_26_2')
 
 def fabricTargets = [
         fabric1201Target,
-        fabric1202To1214Target,
+        fabric1202To1204Target,
+        fabric1205To1214Target,
         fabric1215To12110Target,
         fabric12111Target,
         fabric261To262Target

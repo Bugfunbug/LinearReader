@@ -101,7 +101,8 @@ class BrotliCompressionTest {
     void brotli11FileResistsZstdTargetedRecompression() throws IOException, InterruptedException {
         Path file = tempDir.resolve("r.0.0.linear");
         LinearTestData.writeRegion(file, Map.of(
-                new ChunkPos(0, 0), LinearTestData.simpleChunk("hierarchy-test", 0, 0)
+                new ChunkPos(0, 0), LinearTestData.simpleChunk("hierarchy-test", 0, 0),
+                new ChunkPos(1, 0), LinearTestData.entityChunk(1, 0)
         ));
 
         IdleRecompressor.RecompressResult upgraded = IdleRecompressor.recompressFileTo(

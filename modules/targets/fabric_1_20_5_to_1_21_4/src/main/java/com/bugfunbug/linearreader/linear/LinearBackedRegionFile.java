@@ -18,11 +18,6 @@ import java.nio.ByteBuffer;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
-/**
- * 1.21.5+ variant of LinearBackedRegionFile. The only material change from the
- * older shared implementation is the RegionFile constructor signature required
- * by the compiler; runtime instances are still allocated with Unsafe.
- */
 public final class LinearBackedRegionFile extends RegionFile {
     private static final int STREAM_COPY_BUFFER_SIZE = 8192;
     private static final ThreadLocal<byte[]> TL_STREAM_COPY_BUFFER =
@@ -144,7 +139,7 @@ public final class LinearBackedRegionFile extends RegionFile {
                 raw.close();
                 throw new IOException(
                         "[LinearReader] Unsupported MC compression type in c2me write path: " + type
-                                + " — please report this.");
+                                + " - please report this.");
         }
     }
 

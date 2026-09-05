@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "linearreader",
+  "version": "${version}",
+  "icon": "assets/linearreader/icon.png",
+  "name": "LinearReader",
+  "description": "A mod that uses .linear compression to reduce the file size of your world.",
+  "authors": ["Bugfunbug"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.bugfunbug.linearreader.LinearReader"],
+    "modmenu": [
+      "com.bugfunbug.linearreader.config.ModMenuSupport"
+    ]
+  },
+  "mixins": ["linearreader.mixins.json"],
+  "depends": {
+    "fabricloader":  "${fabric_loader_dependency_range}",
+    "minecraft":     "${minecraft_dependency_range}",
+    "java":          ">=21",
+    "fabric-api":    "*"
+  },
+  "contact": {
+    "homepage": "https://modrinth.com/mod/linearreader",
+    "issues": "https://github.com/Bugfunbug/LinearReader/issues"
+  }
+}

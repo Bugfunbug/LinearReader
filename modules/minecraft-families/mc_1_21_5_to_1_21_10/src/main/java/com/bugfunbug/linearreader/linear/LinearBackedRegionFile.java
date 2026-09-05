@@ -4,6 +4,7 @@ import com.bugfunbug.linearreader.LinearStats;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.chunk.storage.RegionFile;
+import net.minecraft.world.level.chunk.storage.RegionFileVersion;
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
 import sun.misc.Unsafe;
 
@@ -28,22 +29,37 @@ public final class LinearBackedRegionFile extends RegionFile {
             ThreadLocal.withInitial(() -> new byte[STREAM_COPY_BUFFER_SIZE]);
 
     private static final Unsafe UNSAFE;
+    private static final long INFO_OFFSET;
+    private static final long VERSION_OFFSET;
+    private static final RegionStorageInfo LINEAR_STORAGE_INFO =
+            new RegionStorageInfo("linearreader", Level.OVERWORLD, "region");
 
     static {
         try {
             Field f = Unsafe.class.getDeclaredField("theUnsafe");
             f.setAccessible(true);
             UNSAFE = (Unsafe) f.get(null);
+            INFO_OFFSET = objectFieldOffsetByType(RegionStorageInfo.class);
+            VERSION_OFFSET = objectFieldOffsetByType(RegionFileVersion.class);
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
+    }
+
+    private static long objectFieldOffsetByType(Class<?> fieldType) throws NoSuchFieldException {
+        for (Field field : RegionFile.class.getDeclaredFields()) {
+            if (field.getType() == fieldType) {
+                return UNSAFE.objectFieldOffset(field);
+            }
+        }
+        throw new NoSuchFieldException(fieldType.getName());
     }
 
     private LinearRegionFile linear;
 
     @SuppressWarnings("DataFlowIssue")
     private LinearBackedRegionFile() throws IOException {
-        super(new RegionStorageInfo("linearreader", Level.OVERWORLD, "region"), null, null, false);
+        super(LINEAR_STORAGE_INFO, null, null, false);
     }
 
     public static LinearBackedRegionFile create(LinearRegionFile linear) throws IOException {
@@ -51,6 +67,8 @@ public final class LinearBackedRegionFile extends RegionFile {
             LinearBackedRegionFile inst =
                     (LinearBackedRegionFile) UNSAFE.allocateInstance(LinearBackedRegionFile.class);
             inst.linear = linear;
+            UNSAFE.putObject(inst, INFO_OFFSET, LINEAR_STORAGE_INFO);
+            UNSAFE.putObject(inst, VERSION_OFFSET, RegionFileVersion.getSelected());
             return inst;
         } catch (InstantiationException e) {
             throw new IOException("[LinearReader] Cannot allocate LinearBackedRegionFile", e);
