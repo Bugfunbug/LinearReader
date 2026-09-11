@@ -32,8 +32,8 @@ def modName = targetProperty('mod_name')
 def modLicense = targetProperty('mod_license')
 def modAuthors = targetProperty('mod_authors')
 def modDescription = targetProperty('mod_description')
-def zstdVersion = '1.5.7-13'
-def brotliVersion = '1.23.0'
+def zstdVersion = targetProperty('zstd_version')
+def brotliVersion = targetProperty('brotli_version')
 
 version = targetProperty('mod_version')
 group = targetProperty('mod_group_id')
