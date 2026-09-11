@@ -35,7 +35,7 @@ To show LinearReader's storage gains and why high level compression is not used 
 I ran benchmarks for the Anvil file format with Zlib using Java’s default compression level (which is 
 what Vanilla Minecraft uses), Zstd level 4 (which is what LinearReader usually uses for live writes), 
 and Zstd level 22 (which LinearReader uses for recompression). For a deeper dive on the benchmarks, 
-see the `benchmarks/` directory.
+see the [`benchmarks/` directory](https://github.com/Bugfunbug/LinearReader/tree/main/benchmarks).
 
 | Dataset              | Format                 | Size    | Compression Ratio | Compression Speed | Decompression Speed |
 |----------------------|------------------------|---------|-------------------|-------------------|---------------------|
