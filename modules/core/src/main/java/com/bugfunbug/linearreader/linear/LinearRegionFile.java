@@ -983,8 +983,11 @@ public class LinearRegionFile {
         if (threshold >= 0 && elapsedMs > threshold) {
             LinearRuntime.LOGGER.warn(
                     "[LinearReader] Slow region save: r.{}.{}.linear took {}ms (threshold {}ms). " +
-                            "Check disk health. [{}]",
-                    regionX, regionZ, elapsedMs, threshold, diagnosticContext());
+                            "Check disk health. build={}ms compress={}ms write={}ms sync={}ms rename={}ms " +
+                            "(sync={}) [{}]",
+                    regionX, regionZ, elapsedMs, threshold,
+                    buildNs / 1_000_000L, compressNs / 1_000_000L, writeNs / 1_000_000L,
+                    syncNs / 1_000_000L, renameNs / 1_000_000L, dsync, diagnosticContext());
         }
     }
 
