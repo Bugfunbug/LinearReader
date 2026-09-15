@@ -867,8 +867,8 @@ public class LinearRegionFile {
         if (threshold >= 0 && elapsedMs > threshold) {
             LinearRuntime.LOGGER.warn(
                     "[LinearReader] Slow region load: {} took {}ms (threshold {}ms). " +
-                            "Check disk health or lower regionCacheSize.",
-                    src.getFileName(), elapsedMs, threshold);
+                            "Check disk health or lower regionCacheSize. [{}]",
+                    src.getFileName(), elapsedMs, threshold, diagnosticContext());
         } else {
             LinearRuntime.LOGGER.debug("[LinearReader] Loaded {} in {}ms.", src.getFileName(), elapsedMs);
         }
@@ -983,7 +983,8 @@ public class LinearRegionFile {
         if (threshold >= 0 && elapsedMs > threshold) {
             LinearRuntime.LOGGER.warn(
                     "[LinearReader] Slow region save: r.{}.{}.linear took {}ms (threshold {}ms). " +
-                            "Check disk health.", regionX, regionZ, elapsedMs, threshold);
+                            "Check disk health. [{}]",
+                    regionX, regionZ, elapsedMs, threshold, diagnosticContext());
         }
     }
 
@@ -1717,6 +1718,33 @@ public class LinearRegionFile {
             Thread.currentThread().interrupt();
             executor.shutdownNow();
         }
+    }
+
+    /**
+     * Builds a short diagnostic string (heap usage + cumulative GC stats) to
+     * append to slow-save/slow-load warnings, so reports of multi-second
+     * stalls carry enough context to tell "JVM was busy with GC" apart from
+     * "disk was actually slow" without asking the reporter for more info.
+     */
+    public static String diagnosticContext() {
+        Runtime runtime = Runtime.getRuntime();
+        long maxHeap = runtime.maxMemory();
+        long usedHeap = runtime.totalMemory() - runtime.freeMemory();
+
+        long totalGcCount = 0L;
+        long totalGcTimeMs = 0L;
+        for (java.lang.management.GarbageCollectorMXBean gcBean :
+                java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
+            long count = gcBean.getCollectionCount();
+            long time = gcBean.getCollectionTime();
+            if (count > 0) totalGcCount += count;
+            if (time > 0) totalGcTimeMs += time;
+        }
+
+        return String.format(java.util.Locale.ROOT,
+                "heap %.0f/%.0fMB used, GC %d collections/%dms total (cumulative since JVM start)",
+                usedHeap / (1024.0 * 1024.0), maxHeap / (1024.0 * 1024.0),
+                totalGcCount, totalGcTimeMs);
     }
 
     private static long stateNowNs() {

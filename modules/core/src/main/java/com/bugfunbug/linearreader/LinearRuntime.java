@@ -215,11 +215,43 @@ public final class LinearRuntime {
      * Backup writes are still best-effort async work on a separate executor.
      */
     public static void flushRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
-        runRegionIoTasks(regions, "flush", region -> region.flush(true));
+        runRegionIoTasksTimed(regions, "flush", region -> region.flush(true));
     }
 
     public static void closeRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
-        runRegionIoTasks(regions, "close", LinearRegionFile::close);
+        runRegionIoTasksTimed(regions, "close", LinearRegionFile::close);
+    }
+
+    /**
+     * Times the entire blocking flush/close barrier and warns if it took
+     * longer than the slow-I/O threshold. This is the call path that blocks
+     * the invoking thread (the main server thread, when triggered by a
+     * vanilla flush=true save or /save-all flush) until every region in the
+     * batch finishes, so a slow value here maps directly to a perceived
+     * server stall — unlike the per-region warnings in LinearRegionFile,
+     * which don't say anything about the overall blocking duration.
+     */
+    private static void runRegionIoTasksTimed(List<LinearRegionFile> regions, String action,
+                                              RegionIoTask task) throws IOException {
+        if (regions.isEmpty()) {
+            runRegionIoTasks(regions, action, task);
+            return;
+        }
+
+        int threshold = LinearConfig.getSlowIoThresholdMs();
+        long startNs = System.nanoTime();
+        try {
+            runRegionIoTasks(regions, action, task);
+        } finally {
+            long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+            if (threshold >= 0 && elapsedMs > threshold) {
+                LOGGER.warn(
+                        "[LinearReader] Slow blocking {} barrier: {} region(s) took {}ms total "
+                                + "(threshold {}ms) - this blocks the calling thread until every region "
+                                + "finishes. [{}]",
+                        action, regions.size(), elapsedMs, threshold, LinearRegionFile.diagnosticContext());
+            }
+        }
     }
 
     private static void runRegionIoTasks(List<LinearRegionFile> regions, String action,
