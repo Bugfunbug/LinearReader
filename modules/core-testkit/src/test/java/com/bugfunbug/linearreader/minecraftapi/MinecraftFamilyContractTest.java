@@ -22,7 +22,8 @@ class MinecraftFamilyContractTest {
             "com.bugfunbug.linearreader.mc1205to1214.Minecraft1205To1214Family",
             "com.bugfunbug.linearreader.mc1215to12110.Minecraft1215To12110Family",
             "com.bugfunbug.linearreader.mc12111.Minecraft12111Family",
-            "com.bugfunbug.linearreader.mc261to262.Minecraft261To262Family"
+            "com.bugfunbug.linearreader.mc261to262.Minecraft261To262Family",
+            "com.bugfunbug.linearreader.mc263.Minecraft263Family"
     );
 
     @BeforeAll

@@ -49,7 +49,7 @@ sourceSets {
         java.srcDir new File(projectDir, 'src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/core/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/minecraft-api/src/main/java')
-        java.srcDir new File(workspaceRoot, 'modules/minecraft-families/mc_26_1_to_26_2/src/main/java')
+        java.srcDir new File(workspaceRoot, 'modules/minecraft-families/mc_26_3/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/loader-families/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/loader-families/fabric_1_19_to_1_21_11/src/main/java')
         java.srcDir new File(workspaceRoot, 'modules/loader-families/fabric_26_1_to_26_3/src/main/java')

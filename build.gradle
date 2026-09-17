@@ -2,7 +2,7 @@ import org.gradle.util.GradleVersion
 
 plugins {
     id 'base'
-    id 'net.neoforged.moddev' version '2.0.141' apply false
+    id 'net.neoforged.moddev' version '2.0.147' apply false
 }
 
 def targetOrNull = { String path ->
@@ -22,6 +22,7 @@ def fabric1205To1214Target = targetOrNull(':targets:fabric_1_20_5_to_1_21_4')
 def fabric1215To12110Target = targetOrNull(':targets:fabric_1_21_5_to_1_21_10')
 def fabric12111Target = targetOrNull(':targets:fabric_1_21_11')
 def fabric261To262Target = targetOrNull(':targets:fabric_26_1_to_26_2')
+def fabric263Target = targetOrNull(':targets:fabric_26_3')
 def forge1201Target = targetOrNull(':targets:forge_1_20_to_1_20_1')
 def forge1202To1204Target = targetOrNull(':targets:forge_1_20_2_to_1_20_4')
 def forge1206To1214Target = targetOrNull(':targets:forge_1_20_6_to_1_21_4')
@@ -29,6 +30,7 @@ def forge1215Target = targetOrNull(':targets:forge_1_21_5')
 def forge1216To12110Target = targetOrNull(':targets:forge_1_21_6_to_1_21_10')
 def forge12111Target = targetOrNull(':targets:forge_1_21_11')
 def forge261To262Target = targetOrNull(':targets:forge_26_1_to_26_2')
+def forge263Target = targetOrNull(':targets:forge_26_3')
 def neoforge1202To1204Target = targetOrNull(':targets:neoforge_1_20_2_to_1_20_4')
 def neoforge1205To121Target = targetOrNull(':targets:neoforge_1_20_5_to_1_21')
 def neoforge1211To1214Target = targetOrNull(':targets:neoforge_1_21_1_to_1_21_4')
@@ -37,6 +39,7 @@ def neoforge1218Target = targetOrNull(':targets:neoforge_1_21_8')
 def neoforge1219To12110Target = targetOrNull(':targets:neoforge_1_21_9_to_1_21_10')
 def neoforge12111Target = targetOrNull(':targets:neoforge_1_21_11')
 def neoforge261To262Target = targetOrNull(':targets:neoforge_26_1_to_26_2')
+def neoforge263Target = targetOrNull(':targets:neoforge_26_3')
 
 def fabricTargets = [
         fabric1201Target,
@@ -44,7 +47,8 @@ def fabricTargets = [
         fabric1205To1214Target,
         fabric1215To12110Target,
         fabric12111Target,
-        fabric261To262Target
+        fabric261To262Target,
+        fabric263Target
 ].findAll { it != null }
 
 def forgeNeoForgeTargets = [
@@ -55,6 +59,7 @@ def forgeNeoForgeTargets = [
         forge1216To12110Target,
         forge12111Target,
         forge261To262Target,
+//        forge263Target,
         neoforge1202To1204Target,
         neoforge1205To121Target,
         neoforge1211To1214Target,
@@ -62,7 +67,8 @@ def forgeNeoForgeTargets = [
         neoforge1218Target,
         neoforge1219To12110Target,
         neoforge12111Target,
-        neoforge261To262Target
+        neoforge261To262Target,
+        neoforge263Target
 ].findAll { it != null }
 def liveTargets = fabricTargets + forgeNeoForgeTargets
 
@@ -334,6 +340,13 @@ if (gradle9DelegateAvailable) {
                 into layout.buildDirectory.dir('collected-jars/fabric_26_1_to_26_2')
             }
             copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/fabric_26_3/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/fabric_26_3')
+            }
+            copy {
                 from(rootProject.layout.projectDirectory.dir('modules/targets/forge_26_1_to_26_2/build/libs')) {
                     include '*.jar'
                     exclude '*-sources.jar', '*-javadoc.jar'
@@ -341,11 +354,25 @@ if (gradle9DelegateAvailable) {
                 into layout.buildDirectory.dir('collected-jars/forge_26_1_to_26_2')
             }
             copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/forge_26_3/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/forge_26_3')
+            }
+            copy {
                 from(rootProject.layout.projectDirectory.dir('modules/targets/neoforge_26_1_to_26_2/build/libs')) {
                     include '*.jar'
                     exclude '*-sources.jar', '*-javadoc.jar'
                 }
                 into layout.buildDirectory.dir('collected-jars/neoforge_26_1_to_26_2')
+            }
+            copy {
+                from(rootProject.layout.projectDirectory.dir('modules/targets/neoforge_26_3/build/libs')) {
+                    include '*.jar'
+                    exclude '*-sources.jar', '*-javadoc.jar'
+                }
+                into layout.buildDirectory.dir('collected-jars/neoforge_26_3')
             }
         }
     }
