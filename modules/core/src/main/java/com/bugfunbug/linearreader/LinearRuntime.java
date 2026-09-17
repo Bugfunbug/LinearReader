@@ -248,7 +248,7 @@ public final class LinearRuntime {
                 LOGGER.warn(
                         "[LinearReader] Slow blocking {} barrier: {} region(s) took {}ms total "
                                 + "(threshold {}ms) - this blocks the calling thread until every region "
-                                + "finishes. [{}]",
+                                + "finishes.\n{}",
                         action, regions.size(), elapsedMs, threshold, LinearRegionFile.diagnosticContext());
             }
         }

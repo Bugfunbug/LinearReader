@@ -865,10 +865,29 @@ public class LinearRegionFile {
         LinearStats.recordRegionLoad(elapsedNs, readNs, verifyNs, decompressNs, parseNs);
         int  threshold = LinearConfig.getSlowIoThresholdMs();
         if (threshold >= 0 && elapsedMs > threshold) {
+            String compressorLabel = "unknown";
+            int levelOrQuality = -1;
+            try {
+                CompressionAlgorithm.Encoded algo = CompressionAlgorithm.decode(encoded.compressionLevel & 0xFF);
+                compressorLabel = algo.algorithm() == CompressionAlgorithm.Algorithm.BROTLI ? "brotli" : "zstd";
+                levelOrQuality = algo.levelOrQuality();
+            } catch (IllegalArgumentException ignored) {
+                // corrupt/unrecognized byte - leave as "unknown", not worth failing the warning over
+            }
+            double throughputMBs = decompressNs > 0
+                    ? (loaded.decompressedSize / (1024.0 * 1024.0)) / (decompressNs / 1_000_000_000.0)
+                    : 0.0;
             LinearRuntime.LOGGER.warn(
-                    "[LinearReader] Slow region load: {} took {}ms (threshold {}ms). " +
-                            "Check disk health or lower regionCacheSize. [{}]",
-                    src.getFileName(), elapsedMs, threshold, diagnosticContext());
+                    "[LinearReader] Slow region load: {} took {}ms (threshold {}ms).\n" +
+                            "chunks={} input={}KB output={}KB compressor={} level={} throughput={}MB/s\n" +
+                            "timing: read={}ms verify={}ms decompress={}ms parse={}ms\n" +
+                            "{}",
+                    src.getFileName(), elapsedMs, threshold,
+                    encoded.chunkCount, encoded.compressedBodyLength / 1024L, loaded.decompressedSize / 1024L,
+                    compressorLabel, levelOrQuality,
+                    String.format(java.util.Locale.ROOT, "%.2f", throughputMBs),
+                    readNs / 1_000_000L, verifyNs / 1_000_000L, decompressNs / 1_000_000L, parseNs / 1_000_000L,
+                    diagnosticContext());
         } else {
             LinearRuntime.LOGGER.debug("[LinearReader] Loaded {} in {}ms.", src.getFileName(), elapsedMs);
         }
@@ -981,13 +1000,23 @@ public class LinearRegionFile {
         StoragePolicyManager.recordRegionFlush(path, elapsedNs, bodySize, compLen, compressionLevel);
         int  threshold = LinearConfig.getSlowIoThresholdMs();
         if (threshold >= 0 && elapsedMs > threshold) {
+            double savedPct = bodySize > 0 ? (1.0 - (double) compLen / bodySize) * 100.0 : 0.0;
+            double throughputMBs = compressNs > 0
+                    ? (bodySize / (1024.0 * 1024.0)) / (compressNs / 1_000_000_000.0)
+                    : 0.0;
             LinearRuntime.LOGGER.warn(
-                    "[LinearReader] Slow region save: r.{}.{}.linear took {}ms (threshold {}ms). " +
-                            "Check disk health. build={}ms compress={}ms write={}ms sync={}ms rename={}ms " +
-                            "(sync={}) [{}]",
+                    "[LinearReader] Slow region save: r.{}.{}.linear took {}ms (threshold {}ms).\n" +
+                            "chunks={} input={}KB output={}KB saved={}% compressor=zstd level={} throughput={}MB/s\n" +
+                            "timing: build={}ms compress={}ms write={}ms sync={}ms rename={}ms sync={}\n" +
+                            "{}",
                     regionX, regionZ, elapsedMs, threshold,
+                    countSnap, bodySize / 1024L, compLen / 1024L,
+                    String.format(java.util.Locale.ROOT, "%.1f", savedPct),
+                    compressionLevel,
+                    String.format(java.util.Locale.ROOT, "%.2f", throughputMBs),
                     buildNs / 1_000_000L, compressNs / 1_000_000L, writeNs / 1_000_000L,
-                    syncNs / 1_000_000L, renameNs / 1_000_000L, dsync, diagnosticContext());
+                    syncNs / 1_000_000L, renameNs / 1_000_000L, dsync,
+                    diagnosticContext());
         }
     }
 
@@ -1274,7 +1303,7 @@ public class LinearRegionFile {
         chunkCount = realCount;
         totalDataBytes = totalSz;
         long parseNs = System.nanoTime() - parseStartNs;
-        return new LoadValidationResult(verifyNs, decompressed.elapsedNs, parseNs);
+        return new LoadValidationResult(verifyNs, decompressed.elapsedNs, parseNs, body.length);
     }
 
     private static ValidationResult validateEncodedLinearFile(Path src, EncodedLinearFile encoded) throws IOException {
@@ -1481,11 +1510,13 @@ public class LinearRegionFile {
         final long verifyNs;
         final long decompressNs;
         final long parseNs;
+        final int  decompressedSize;
 
-        private LoadValidationResult(long verifyNs, long decompressNs, long parseNs) {
+        private LoadValidationResult(long verifyNs, long decompressNs, long parseNs, int decompressedSize) {
             this.verifyNs = verifyNs;
             this.decompressNs = decompressNs;
             this.parseNs = parseNs;
+            this.decompressedSize = decompressedSize;
         }
     }
 
@@ -1724,10 +1755,8 @@ public class LinearRegionFile {
     }
 
     /**
-     * Builds a short diagnostic string (heap usage + cumulative GC stats) to
-     * append to slow-save/slow-load warnings, so reports of multi-second
-     * stalls carry enough context to tell "JVM was busy with GC" apart from
-     * "disk was actually slow" without asking the reporter for more info.
+     * Builds a diagnostic string to append to slow-save/slow-load warnings,
+     * useful to have in reports.
      */
     public static String diagnosticContext() {
         Runtime runtime = Runtime.getRuntime();
@@ -1736,18 +1765,41 @@ public class LinearRegionFile {
 
         long totalGcCount = 0L;
         long totalGcTimeMs = 0L;
+        StringBuilder gcNames = new StringBuilder();
         for (java.lang.management.GarbageCollectorMXBean gcBean :
                 java.lang.management.ManagementFactory.getGarbageCollectorMXBeans()) {
             long count = gcBean.getCollectionCount();
             long time = gcBean.getCollectionTime();
             if (count > 0) totalGcCount += count;
             if (time > 0) totalGcTimeMs += time;
+            if (!gcNames.isEmpty()) gcNames.append('+');
+            gcNames.append(gcBean.getName());
         }
 
+        String cpuLoad = "n/a";
+        java.lang.management.OperatingSystemMXBean osBean =
+                java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+        if (osBean instanceof com.sun.management.OperatingSystemMXBean sunOsBean) {
+            double load = sunOsBean.getCpuLoad(); // JVM-wide CPU load, 0.0-1.0, negative if unavailable
+            if (load >= 0.0) {
+                cpuLoad = String.format(java.util.Locale.ROOT, "%.0f%%", load * 100.0);
+            }
+        }
+
+        int backlog = StoragePolicyManager.debugSnapshot().backlog();
+
         return String.format(java.util.Locale.ROOT,
-                "heap %.0f/%.0fMB used, GC %d collections/%dms total (cumulative since JVM start)",
+                "runtime: thread=%s priority=%d cpuLoad=%s cores=%d%n" +
+                        "queue: pendingFlushes=%d openRegions=%d recompressing=%b pregen=%b%n" +
+                        "memory: heap=%.0f/%.0fMB%n" +
+                        "gc[cumulative]: %s %d collections/%dms%n" +
+                        "java=%s os=%s/%s",
+                Thread.currentThread().getName(), Thread.currentThread().getPriority(),
+                cpuLoad, runtime.availableProcessors(),
+                backlog, ALL_OPEN.size(), IdleRecompressor.isRunning(), DHPregenMonitor.isPregenActive(),
                 usedHeap / (1024.0 * 1024.0), maxHeap / (1024.0 * 1024.0),
-                totalGcCount, totalGcTimeMs);
+                gcNames, totalGcCount, totalGcTimeMs,
+                System.getProperty("java.version"), System.getProperty("os.name"), System.getProperty("os.arch"));
     }
 
     private static long stateNowNs() {
