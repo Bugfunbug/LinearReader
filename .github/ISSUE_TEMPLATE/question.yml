@@ -16,10 +16,10 @@ body:
     validations:
       required: true
   - type: textarea
-    id: additional-info
+    id: additions
     attributes:
       label: Anything else I should know?
       description: Add anything else you want. Files, logs, pictures, or anything as long as it is connected to your question.
-      placeholder: [Extra stuff goes here]
+      placeholder: Extra stuff goes here.
     validations:
       required: false
