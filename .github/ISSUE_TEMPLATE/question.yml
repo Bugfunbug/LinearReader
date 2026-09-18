@@ -1,0 +1,13 @@
+name: Question/Help
+description: Ask a question
+title: "Question/Help: "
+
+body:
+  - type: textarea
+    id: test
+    attributes:
+      label: Test
+      description: Test
+      placeholder: Testing, Testing, 1 2 3
+    validations:
+      required: true

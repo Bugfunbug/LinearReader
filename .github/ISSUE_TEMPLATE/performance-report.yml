@@ -1,0 +1,13 @@
+name: Performance Report
+description: Report a performance issue you're experiencing.
+title: "Performance Report: "
+
+body:
+  - type: textarea
+    id: test
+    attributes:
+      label: Test
+      description: Test
+      placeholder: Testing, Testing, 1 2 3
+    validations:
+      required: true
