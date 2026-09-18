@@ -1,7 +1,7 @@
 name: Performance Report
 description: Report a performance issue you're experiencing.
 title: "Performance Report: "
-labels: ["performance report"]
+labels: ["performance issue"]
 body:
   - type: markdown
     attributes:
@@ -97,7 +97,7 @@ body:
   - type: textarea
     id: slow
     attributes:
-      label: So, tell me seems to be the problem?
+      label: So, what exactly seems to be the problem?
       description: What part of the game seems to not be working correctly?
       placeholder: Tell me what's wrong...
     validations:
