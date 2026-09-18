@@ -1,13 +1,25 @@
 name: Question/Help
 description: Ask a question
 title: "Question/Help: "
-
+labels: ["question"]
 body:
-  - type: textarea
-    id: test
+  - type: markdown
     attributes:
-      label: Test
-      description: Test
-      placeholder: Testing, Testing, 1 2 3
+      value: |
+        Have a question? Ask it here! I will try my best to respond quickly.
+  - type: textarea
+    id: question
+    attributes:
+      label: What do you need help with?
+      description: Please ask your question and give any necessary context.
+      placeholder: What's on your mind?
     validations:
       required: true
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: Anything else I should know?
+      description: Add anything else you want. Files, logs, pictures, or anything as long as it is connected to your question.
+      placeholder: [Extra stuff goes here]
+    validations:
+      required: false
