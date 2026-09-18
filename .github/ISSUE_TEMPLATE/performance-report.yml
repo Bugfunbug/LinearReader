@@ -1,13 +1,211 @@
 name: Performance Report
 description: Report a performance issue you're experiencing.
 title: "Performance Report: "
-
+labels: ["performance report"]
 body:
-  - type: textarea
-    id: test
+  - type: markdown
     attributes:
-      label: Test
-      description: Test
-      placeholder: Testing, Testing, 1 2 3
+      value: |
+        Seems like your game is acting weird. Let's take a look, shall we?
+  - type: dropdown
+    id: minecraft-version
+    attributes:
+      label: Minecraft Version
+      description: What version of Minecraft are you on?
+      options:
+        - "1.20"
+        - "1.20.1"
+        - "1.20.2"
+        - "1.20.3"
+        - "1.20.4"
+        - "1.20.5"
+        - "1.20.6"
+        - "1.21"
+        - "1.21.1"
+        - "1.21.2"
+        - "1.21.3"
+        - "1.21.4"
+        - "1.21.5"
+        - "1.21.6"
+        - "1.21.7"
+        - "1.21.8"
+        - "1.21.9"
+        - "1.21.10"
+        - "1.21.11"
+        - "26.1"
+        - "26.1.1"
+        - "26.1.2"
+        - "26.2"
+        - "26.3"
     validations:
       required: true
+  - type: dropdown
+    id: loader
+    attributes:
+      label: Mod Loader
+      description: What mod loader are you running?
+      options:
+        - "Forge"
+        - "Fabric"
+        - "NeoForge"
+    validations:
+      required: true
+  - type: input
+    id: loader-version
+    attributes:
+      label: Loader Version
+      description: Provide which version of the mod loader you are using.
+      placeholder: This is likely a bit unnecessary...
+    validations:
+      required: false
+  - type: dropdown
+    id: linearreader-version
+    attributes:
+      label: LinearReader Version
+      description: What version of LinearReader are you using?
+      options:
+        - "1.0.0"
+        - "1.0.1"
+        - "1.1.0"
+        - "1.1.1"
+        - "1.1.2"
+        - "1.1.3"
+        - "1.1.4"
+        - "1.2.0"
+        - "1.2.0.1"
+        - "1.2.1"
+        - "1.3.0"
+        - "1.3.0.1"
+    validations:
+      required: true
+  - type: checkboxes
+    id: what-is-issue
+    attributes:
+      label: What part(s) of the game seems to be experiencing performance issues?
+      description: Select everything that applies.
+      options:
+        - label: Region loading
+        - label: Region saving
+        - label: Compression/recompression
+        - label: Decompression
+        - label: TPS/tick performance
+        - label: World generation/chunk generation
+        - label: Server startup
+        - label: Other (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: slow
+    attributes:
+      label: So, tell me seems to be the problem?
+      description: What part of the game seems to not be working correctly?
+      placeholder: Tell me what's wrong...
+    validations:
+      required: true
+  - type: textarea
+    id: describe
+    attributes:
+      label: Please describe the performance issue.
+      description: When does it happen? How long does it last? Is there a trigger? Is it caused by heavy load on the server? What exactly are you doing when this happens? (And more...)
+      placeholder: I got time.
+    validations:
+      required: true
+  - type: dropdown
+    id: consistency
+    attributes:
+      label: How often does this issue happen? (Choices go from most often down to least often.)
+      options:
+        - "All the time"
+        - "Most of the time"
+        - "Regularly"
+        - "Occasionally"
+        - "Not all too often"
+        - "I've seen it just a couple of times"
+        - "Once"
+        - "N/A"
+    validations:
+      required: true
+  - type: dropdown
+    id: only-linearreader
+    attributes:
+      label: Does this issue occur with only LinearReader installed? Or does it require other mods to be present?
+      options:
+        - "Yes"
+        - "No (see below)"
+        - "I did some testing, but I really just don't know..."
+    validations:
+      required: true
+  - type: textarea
+    id: mod-list
+    attributes:
+      label: List the other mods (and their versions) that must be installed for this performance issue to occur.
+      description: Try to slim the list down if you can, I'd appreciate it. You can perform a [binary search](https://www.khanacademy.org/computing/computer-science/algorithms/binary-search/a/binary-search) to try and figure out what mod(s) is/are the culprit. Download links are also appreciated, especially for uncommon mods.
+      placeholder: The list, please.
+    validations:
+      required: false
+  - type: input
+    id: logs
+    attributes:
+      label: Don't forget the logs!
+      description: Please share your logs with me by uploading your latest.log file to [mclo.gs](https://mclo.gs), and then provide the mclo.gs link here. (If you truly think the logs are useless in this case, then write N/A, otherwise I expect a mclo.gs link.)
+      placeholder: I'm going to need to see some logs.
+    validations:
+      required: true
+  - type: textarea
+    id: bench
+    attributes:
+      label: LinearReader Diagnostics
+      description: If you ran any of the diagnostic LinearReader commands, paste their output here.
+      placeholder: Diagnostics could lead to diagnosis.
+    validations:
+      required: false
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: If relevant, please give some specifications regarding the hardware of your computer. It could be helpful to know what your CPU, RAM, and storage is like.
+      placeholder: Hopefully you remember what you bought.
+    validations:
+      required: false
+  - type: dropdown
+    id: environment
+    attributes:
+      label: What is your server environment like?
+      options:
+        - "Singleplayer"
+        - "LAN server"
+        - "Dedicated server"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: other
+    attributes:
+      label: If you picked "other" above, what is it?
+      placeholder: I'm quite curious to know.
+    validations:
+      required: false
+  - type: textarea
+    id: world
+    attributes:
+      label: World Info
+      description: Is there anything about your world I should know? Things like age, size, and modded terrain might be helpful to know.
+      placeholder: Or is this world part of your 2 week Minecraft phase?
+    validations:
+      required: false
+  - type: textarea
+    id: spark
+    attributes:
+      label: Spark Output
+      description: Do you happen to have a Spark profiler output that connects with this issue? If so, put it here.
+      placeholder: Only the most serious of Minecrafters use can fill this one out.
+    validations:
+      required: false
+  - type: textarea
+    id: finally
+    attributes:
+      label: Anything else?
+      description: After all of that, is there anything else I should know?
+      placeholder: I'd be surprised if something didn't fit in above...
+    validations:
+      required: false
