@@ -13,7 +13,7 @@ body:
     attributes:
       label: What's your idea?
       description: Describe the feature or improvement you thought of.
-      placeholder: Lay it on me.
+      placeholder: Type away, there's no word limit.
     validations:
       required: true
   - type: textarea
