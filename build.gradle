@@ -59,7 +59,7 @@ def forgeNeoForgeTargets = [
         forge1216To12110Target,
         forge12111Target,
         forge261To262Target,
-//        forge263Target,
+        forge263Target,
         neoforge1202To1204Target,
         neoforge1205To121Target,
         neoforge1211To1214Target,
