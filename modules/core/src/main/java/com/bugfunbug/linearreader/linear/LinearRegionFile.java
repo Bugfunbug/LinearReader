@@ -5,6 +5,7 @@ import com.bugfunbug.linearreader.LinearStats;
 import com.bugfunbug.linearreader.StoragePolicyManager;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
+import net.minecraft.nbt.NbtIo;
 import net.minecraft.world.level.ChunkPos;
 
 import org.jetbrains.annotations.Nullable;
@@ -635,6 +636,17 @@ public class LinearRegionFile {
     }
 
     public void flush(boolean allowBackup) throws IOException {
+        flush(allowBackup, null);
+    }
+
+    /**
+     * Same as {@link #flush(boolean)}, but lets the caller force a specific
+     * zstd level for this one flush instead of using
+     * {@link LinearRuntime#currentLiveCompressionLevel()} (the adaptive
+     * policy level normal live writes use). Pass {@code null} for normal
+     * behavior. Used by {@code /linearreader save-all <level>}.
+     */
+    public void flush(boolean allowBackup, Integer compressionLevelOverride) throws IOException {
         if (!dirty) return; // fast volatile read before acquiring any lock
 
         final long snapshotStartNs = System.nanoTime();
@@ -669,7 +681,7 @@ public class LinearRegionFile {
             try {
                 long snapshotNs = System.nanoTime() - snapshotStartNs;
                 writeToDisk(dataSnap, sizeSnap, offsetSnap, tsSnap, bodySnap,
-                        newestTsSnap, countSnap, totalBytesSnap, snapshotNs);
+                        newestTsSnap, countSnap, totalBytesSnap, snapshotNs, compressionLevelOverride);
                 ioOk = true;
                 lastSuccessfulFlushNs = stateNowNs();
             } finally {
@@ -900,7 +912,7 @@ public class LinearRegionFile {
     private void writeToDisk(byte[][] dataSnap, int[] sizeSnap, int[] offsetSnap,
                              int[] tsSnap, @Nullable byte[] bodySnap,
                              long newestTsSnap, int countSnap, long totalBytesSnap,
-                             long snapshotNs)
+                             long snapshotNs, @Nullable Integer compressionLevelOverride)
             throws IOException {
 
         Files.createDirectories(path.getParent());
@@ -925,7 +937,9 @@ public class LinearRegionFile {
         }
 
         long startNs = System.nanoTime();
-        int compressionLevel = LinearRuntime.currentLiveCompressionLevel();
+        int compressionLevel = compressionLevelOverride != null
+                ? compressionLevelOverride
+                : LinearRuntime.currentLiveCompressionLevel();
 
         int totalBytes = (int) totalBytesSnap;
         int bodySize   = INNER_HEADER_SIZE + totalBytes;
@@ -1198,13 +1212,50 @@ public class LinearRegionFile {
     // -------------------------------------------------------------------------
 
     public static VerifyResult verifyOnDisk(Path file) {
+        return verifyOnDisk(file, false);
+    }
+
+    /**
+     * Same as {@link #verifyOnDisk(Path)}, but when {@code deep} is true also
+     * parses every stored chunk's NBT (not just the container structure and
+     * checksum), catching per-chunk corruption that a passing CRC and matching
+     * chunk-size table alone would not reveal.
+     */
+    public static VerifyResult verifyOnDisk(Path file, boolean deep) {
         try {
-            ValidationResult validated = validateEncodedLinearFile(file, readEncodedLinearFile(file));
-            return VerifyResult.ok(validated.hasCRC);
+            EncodedLinearFile encoded = readEncodedLinearFile(file);
+            ValidationResult validated = validateEncodedLinearFile(file, encoded);
+            int corruptChunkCount = -1;
+            if (deep) {
+                corruptChunkCount = countCorruptChunks(validated.decompressedBody, validated.parsedChunkSizes);
+            }
+            if (corruptChunkCount > 0) {
+                return VerifyResult.corruptChunks(validated.hasCRC, validated.realChunkCount,
+                        corruptChunkCount, encoded.compressedBodyLength);
+            }
+            return VerifyResult.ok(validated.hasCRC, validated.realChunkCount,
+                    corruptChunkCount, encoded.compressedBodyLength);
         } catch (IOException e) {
             String msg = e.getMessage();
             return VerifyResult.fail(msg != null && msg.startsWith("[LinearReader]") ? msg : "I/O error: " + msg);
         }
+    }
+
+    /** Deep-check helper: tries to parse each present chunk's NBT, returns how many failed. */
+    private static int countCorruptChunks(byte[] decompressed, int[] parsedChunkSizes) {
+        int offset = INNER_HEADER_SIZE;
+        int corrupt = 0;
+        for (int i = 0; i < CHUNK_COUNT; i++) {
+            int len = parsedChunkSizes[i];
+            if (len <= 0) continue;
+            try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(decompressed, offset, len))) {
+                NbtIo.read(in);
+            } catch (Exception e) {
+                corrupt++;
+            }
+            offset += len;
+        }
+        return corrupt;
     }
 
     static EncodedLinearFile readEncodedLinearFile(Path src) throws IOException {
@@ -1522,16 +1573,34 @@ public class LinearRegionFile {
 
     public static class VerifyResult {
         public final boolean ok;
-        public final boolean hasCRC;  // false = Python-written or pre-1.0 file (no checksum)
+        public final boolean hasCRC;         // false = Python-written or pre-1.0 file (no checksum)
         public final String  reason;
+        public final int     chunkCount;      // chunks present per header, -1 if never reached (early failure)
+        public final int     corruptChunkCount; // -1 = deep check not requested
+        public final long    compressedBytes;   // -1 if never reached (early failure)
 
-        private VerifyResult(boolean ok, boolean hasCRC, String reason) {
+        private VerifyResult(boolean ok, boolean hasCRC, String reason,
+                             int chunkCount, int corruptChunkCount, long compressedBytes) {
             this.ok     = ok;
             this.hasCRC = hasCRC;
             this.reason = reason;
+            this.chunkCount = chunkCount;
+            this.corruptChunkCount = corruptChunkCount;
+            this.compressedBytes = compressedBytes;
         }
-        static VerifyResult ok(boolean hasCRC)   { return new VerifyResult(true,  hasCRC, null); }
-        static VerifyResult fail(String why)     { return new VerifyResult(false, false,  why);  }
+
+        static VerifyResult ok(boolean hasCRC, int chunkCount, int corruptChunkCount, long compressedBytes) {
+            return new VerifyResult(true, hasCRC, null, chunkCount, corruptChunkCount, compressedBytes);
+        }
+
+        static VerifyResult corruptChunks(boolean hasCRC, int chunkCount, int corruptChunkCount, long compressedBytes) {
+            return new VerifyResult(false, hasCRC, corruptChunkCount + " chunk(s) failed NBT parsing",
+                    chunkCount, corruptChunkCount, compressedBytes);
+        }
+
+        static VerifyResult fail(String why) {
+            return new VerifyResult(false, false, why, -1, -1, -1L);
+        }
     }
 
     private void serializeRegionBody(byte[][] dataSnap, int[] sizeSnap, int[] offsetSnap,

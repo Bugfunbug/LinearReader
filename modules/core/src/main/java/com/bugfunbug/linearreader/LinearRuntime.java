@@ -215,7 +215,17 @@ public final class LinearRuntime {
      * Backup writes are still best-effort async work on a separate executor.
      */
     public static void flushRegionsBlocking(List<LinearRegionFile> regions) throws IOException {
-        runRegionIoTasksTimed(regions, "flush", region -> region.flush(true));
+        flushRegionsBlocking(regions, null);
+    }
+
+    /**
+     * Same as {@link #flushRegionsBlocking(List)}, but lets the caller force
+     * a specific zstd level for every region in this batch instead of the
+     * adaptive policy level. Pass {@code null} for normal behavior.
+     */
+    public static void flushRegionsBlocking(List<LinearRegionFile> regions, Integer compressionLevelOverride)
+            throws IOException {
+        runRegionIoTasksTimed(regions, "flush", region -> region.flush(true, compressionLevelOverride));
     }
 
     public static void closeRegionsBlocking(List<LinearRegionFile> regions) throws IOException {

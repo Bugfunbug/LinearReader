@@ -55,7 +55,9 @@ public final class LinearCommandRegistrar {
                         .then(Commands.literal("pos")
                                 .executes(LinearCommandRegistrar::executePos))
                         .then(Commands.literal("verify")
-                                .executes(LinearCommandRegistrar::executeVerify))
+                                .executes(LinearCommandRegistrar::executeVerify)
+                                .then(Commands.literal("deep")
+                                        .executes(LinearCommandRegistrar::executeVerifyDeep)))
                         .then(Commands.literal("prune-chunks")
                                 .executes(LinearCommandRegistrar::executePruneChunks)
                                 .then(Commands.literal("confirm")
@@ -64,6 +66,10 @@ public final class LinearCommandRegistrar {
                                 .executes(LinearCommandRegistrar::executeSyncBackups)
                                 .then(Commands.literal("confirm")
                                         .executes(LinearCommandRegistrar::executeSyncBackupsConfirm)))
+                        .then(Commands.literal("save-all")
+                                .executes(LinearCommandRegistrar::executeSaveAll)
+                                .then(Commands.argument("zstdLevel", IntegerArgumentType.integer(1, 22))
+                                        .executes(LinearCommandRegistrar::executeSaveAllWithLevel)))
                         .then(Commands.literal("bench")
                                 .executes(LinearCommandRegistrar::executeBench)
                                 .then(Commands.literal("debug")
@@ -294,51 +300,90 @@ public final class LinearCommandRegistrar {
     // /linearreader verify
     // ---------------------------------------------------------------------------
     private static int executeVerify(CommandContext<CommandSourceStack> ctx) {
+        return runVerify(ctx, false);
+    }
+
+    private static int executeVerifyDeep(CommandContext<CommandSourceStack> ctx) {
+        return runVerify(ctx, true);
+    }
+
+    private static int runVerify(CommandContext<CommandSourceStack> ctx, boolean deep) {
         MinecraftServer    server    = ctx.getSource().getServer();
         Path               worldRoot = LinearRuntime.resolveWorldRoot(server);
         CommandSourceStack source    = ctx.getSource();
 
         source.sendSuccess(() -> Component.literal(
-                "§6[LinearReader] Starting region verification — results will appear here."), false);
+                "§6[LinearReader] Starting" + (deep ? " deep" : "") + " region verification"
+                        + " — results will appear here."), false);
 
         Thread verifyThread = new Thread(() -> {
-            List<Path> allFiles = new ArrayList<>();
+            long startNs = System.nanoTime();
+            List<Path> liveFiles = new ArrayList<>();
+            List<Path> backupFiles = new ArrayList<>();
             try (Stream<Path> stream = Files.walk(worldRoot)) {
-                stream.filter(Files::isRegularFile)
-                        .filter(p -> p.getFileName().toString().endsWith(".linear"))
-                        .forEach(allFiles::add);
+                stream.filter(Files::isRegularFile).forEach(p -> {
+                    String name = p.getFileName().toString();
+                    if (name.endsWith(".linear")) {
+                        liveFiles.add(p);
+                    } else if (name.endsWith(".linear.bak")) {
+                        backupFiles.add(p);
+                    }
+                });
             } catch (IOException e) {
                 sendFromThread(source, "§c[LinearReader] Verify failed — could not walk world: " + e.getMessage());
                 return;
             }
 
-            if (allFiles.isEmpty()) {
-                sendFromThread(source, "§e[LinearReader] No .linear files found to verify.");
+            if (liveFiles.isEmpty() && backupFiles.isEmpty()) {
+                sendFromThread(source, "§e[LinearReader] No .linear or .linear.bak files found to verify.");
                 return;
             }
 
-            int total = allFiles.size(), ok = 0, failed = 0, noCRC = 0;
+            LinearRuntime.LOGGER.info(
+                    "[LinearReader] Verify{} started: {} live region file(s), {} backup file(s).",
+                    deep ? " (deep)" : "", liveFiles.size(), backupFiles.size());
 
-            for (Path file : allFiles) {
-                LinearRegionFile.VerifyResult result = LinearRegionFile.verifyOnDisk(file);
-                if (result.ok) {
-                    ok++;
-                    if (!result.hasCRC) noCRC++;
-                } else {
-                    failed++;
-                    String reason = file.getFileName() + " — " + result.reason;
-                    LinearRuntime.LOGGER.warn("[LinearReader] CORRUPT: {}", reason);
-                    sendFromThread(source, "§c[LinearReader] CORRUPT: " + reason);
+            VerifyTally live = verifyBatch(source, liveFiles, deep, "live");
+            VerifyTally backups = verifyBatch(source, backupFiles, deep, "backup");
+
+            long elapsedMs = (System.nanoTime() - startNs) / 1_000_000L;
+            long totalBytes = live.bytesScanned + backups.bytesScanned;
+
+            StringBuilder summary = new StringBuilder("§6[LinearReader] Verify")
+                    .append(deep ? " (deep)" : "").append(" complete in ").append(fmtDuration(elapsedMs))
+                    .append(":\n")
+                    .append("§7  Live regions   : §f").append(live.ok).append("§7/§f").append(live.total)
+                    .append(" OK");
+            if (live.corrupt > 0) summary.append(" §c(").append(live.corrupt).append(" corrupt)");
+            if (live.noCRC > 0) summary.append(" §e(").append(live.noCRC).append(" without checksum)");
+            summary.append('\n');
+
+            if (backups.total > 0) {
+                summary.append("§7  Backups        : §f").append(backups.ok).append("§7/§f").append(backups.total)
+                        .append(" OK");
+                if (backups.corrupt > 0) summary.append(" §c(").append(backups.corrupt).append(" corrupt)");
+                if (backups.noCRC > 0) summary.append(" §e(").append(backups.noCRC).append(" without checksum)");
+                summary.append('\n');
+            }
+
+            summary.append("§7  Data scanned   : §f").append(fmtSize(totalBytes));
+            if (deep) {
+                int deepCorruptChunks = live.corruptChunks + backups.corruptChunks;
+                summary.append("\n§7  Chunks parsed  : §f").append(live.chunksParsed + backups.chunksParsed);
+                if (deepCorruptChunks > 0) {
+                    summary.append(" §c(").append(deepCorruptChunks).append(" corrupt chunk(s) found)");
                 }
             }
 
-            final int noCRCFinal = noCRC;
-            final String summary = "§6[LinearReader] Verify complete: §f" + total
-                    + "§6 files scanned - §a" + ok + " OK"
-                    + (failed    > 0 ? "§c, " + failed    + " CORRUPT" : "")
-                    + (noCRCFinal > 0 ? "§e, " + noCRCFinal + " without checksum" : "")
-                    + "§6.";
-            sendFromThread(source, summary);
+            String summaryText = summary.toString();
+            sendFromThread(source, summaryText);
+            LinearRuntime.LOGGER.info(
+                    "[LinearReader] Verify{} summary: live {}/{} ok ({} corrupt, {} no-CRC), "
+                            + "backups {}/{} ok ({} corrupt, {} no-CRC), {} scanned in {}ms.",
+                    deep ? " (deep)" : "",
+                    live.ok, live.total, live.corrupt, live.noCRC,
+                    backups.ok, backups.total, backups.corrupt, backups.noCRC,
+                    fmtSize(totalBytes), elapsedMs);
 
         }, "linearreader-verify");
 
@@ -347,9 +392,59 @@ public final class LinearCommandRegistrar {
         return 1;
     }
 
+    private static VerifyTally verifyBatch(CommandSourceStack source, List<Path> files, boolean deep, String kind) {
+        VerifyTally tally = new VerifyTally();
+        tally.total = files.size();
+        long lastProgressLogNs = System.nanoTime();
+
+        for (Path file : files) {
+            LinearRegionFile.VerifyResult result = LinearRegionFile.verifyOnDisk(file, deep);
+            if (result.compressedBytes > 0) {
+                tally.bytesScanned += result.compressedBytes;
+            }
+            if (result.chunkCount > 0) {
+                tally.chunksParsed += result.chunkCount;
+            }
+            if (result.ok) {
+                tally.ok++;
+                if (!result.hasCRC) tally.noCRC++;
+            } else {
+                tally.corrupt++;
+                if (result.corruptChunkCount > 0) {
+                    tally.corruptChunks += result.corruptChunkCount;
+                }
+                String reason = kind + ": " + file.getFileName() + " — " + result.reason;
+                LinearRuntime.LOGGER.warn("[LinearReader] CORRUPT: {}", reason);
+                sendFromThread(source, "§c[LinearReader] CORRUPT: " + reason);
+            }
+
+            long nowNs = System.nanoTime();
+            if (files.size() > 200 && nowNs - lastProgressLogNs > 10_000_000_000L) {
+                lastProgressLogNs = nowNs;
+                LinearRuntime.LOGGER.info("[LinearReader] Verify progress ({}): {}/{} file(s) scanned.",
+                        kind, tally.ok + tally.corrupt, tally.total);
+            }
+        }
+        return tally;
+    }
+
+    private static final class VerifyTally {
+        int total;
+        int ok;
+        int corrupt;
+        int noCRC;
+        int chunksParsed;
+        int corruptChunks;
+        long bytesScanned;
+    }
+
     private static void sendFromThread(CommandSourceStack source, String msg) {
         source.sendSuccess(() -> Component.literal(msg), false);
     }
+
+    // ---------------------------------------------------------------------------
+    // /linearreader prune-chunks
+    // ---------------------------------------------------------------------------
 
     private static int executePruneChunks(CommandContext<CommandSourceStack> ctx) {
         return ChunkPruner.startDryRun(ctx.getSource());
@@ -359,12 +454,29 @@ public final class LinearCommandRegistrar {
         return ChunkPruner.confirm(ctx.getSource());
     }
 
+    // ---------------------------------------------------------------------------
+    // /linearreader sync-backups
+    // ---------------------------------------------------------------------------
+
     private static int executeSyncBackups(CommandContext<CommandSourceStack> ctx) {
         return BackupSyncer.startDryRun(ctx.getSource());
     }
 
     private static int executeSyncBackupsConfirm(CommandContext<CommandSourceStack> ctx) {
         return BackupSyncer.confirm(ctx.getSource());
+    }
+
+    // ---------------------------------------------------------------------------
+    // /linearreader save-all
+    // ---------------------------------------------------------------------------
+
+    private static int executeSaveAll(CommandContext<CommandSourceStack> ctx) {
+        return SaveAllRunner.start(ctx.getSource(), null);
+    }
+
+    private static int executeSaveAllWithLevel(CommandContext<CommandSourceStack> ctx) {
+        int level = IntegerArgumentType.getInteger(ctx, "zstdLevel");
+        return SaveAllRunner.start(ctx.getSource(), level);
     }
 
     // ---------------------------------------------------------------------------

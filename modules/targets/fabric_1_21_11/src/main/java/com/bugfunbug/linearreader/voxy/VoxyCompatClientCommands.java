@@ -27,7 +27,7 @@ public final class VoxyCompatClientCommands {
 
     private static final List<String> SERVER_SUBCOMMANDS = List.of(
             "cache_info", "storage", "health", "pos", "verify",
-            "prune-chunks", "sync-backups", "bench", "afk-compress",
+            "prune-chunks", "sync-backups", "save-all", "bench", "afk-compress",
             "pin", "unpin", "pins", "export-mca", "graph"
     );
 
