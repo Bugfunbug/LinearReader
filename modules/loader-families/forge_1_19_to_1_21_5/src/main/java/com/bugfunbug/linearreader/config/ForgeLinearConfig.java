@@ -187,7 +187,7 @@ public final class ForgeLinearConfig {
                         "Maximum cumulative InhabitedTime (in ticks) a chunk can have and",
                         "still be eligible for /linearreader prune-chunks.",
                         "A single flythrough is roughly 20-100 ticks; a repeatedly-visited",
-                        "chunk (e.g. an elytra highway) accumulates well past this.",
+                        "chunk accumulates well past this.",
                         "Default = 1200 (about 1 minute of cumulative loaded time)"
                 )
                 .defineInRange("pruneMaxInhabitedTimeTicks", 1200, 0, 1_000_000);

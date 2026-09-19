@@ -121,8 +121,8 @@ public final class FabricConfigIO {
         addInt(lines, "pruneMaxInhabitedTimeTicks", config.pruneMaxInhabitedTimeTicks,
                 "Maximum cumulative InhabitedTime (in ticks) a chunk can have and still",
                 "be eligible for /linearreader prune-chunks. A single flythrough is",
-                "roughly 20-100 ticks; a repeatedly-visited chunk (e.g. an elytra",
-                "highway) accumulates well past this.",
+                "roughly 20-100 ticks; a repeatedly-visited chunk accumulates well",
+                "past this.",
                 "Default = 1200 (about 1 minute of cumulative loaded time)");
         addInt(lines, "pruneMinRegionQuietHours", config.pruneMinRegionQuietHours,
                 "Hours a region file must have no writes before its chunks become",
