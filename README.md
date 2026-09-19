@@ -37,17 +37,17 @@ what Vanilla Minecraft uses), Zstd level 4 (which is what LinearReader usually u
 and Zstd level 22 (which LinearReader uses for recompression). For a deeper dive on the benchmarks, 
 see the [`benchmarks/` directory](https://github.com/Bugfunbug/LinearReader/tree/main/benchmarks).
 
-| Dataset              | Format                 | Size    | Compression Ratio | Compression Speed | Decompression Speed |
-|----------------------|------------------------|---------|-------------------|-------------------|---------------------|
-| Overworld            | Anvil/Zlib 6           | 8.38 GB | 5.44x             | 75.7 MB/s         | 1271.3 MB/s         |
-| Overworld            | LinearReader (Zstd 4)  | 6.21 GB | 7.39x             | 585.5 MB/s        | 1412.8 MB/s         |
-| Overworld            | LinearReader (Zstd 22) | 4.28 GB | 10.71x            | 4.4 MB/s          | 1589.2 MB/s         |
-| End (mostly void)    | Anvil/Zlib 6           | 2.16 GB | 3.66x             | 188.4 MB/s        | 1576.4 MB/s         |
-| End (mostly void)    | LinearReader (Zstd 4)  | 244 MB  | 33.20x            | 1811.1 MB/s       | 4062.7 MB/s         |
-| End (mostly void)    | LinearReader (Zstd 22) | 141 MB  | 57.50x            | 10.1 MB/s         | 6166.9 MB/s         |
-| Tectonic + Terralith | Anvil/Zlib 6           | 2.56 GB | 5.97x             | 84.1 MB/s         | 1338.1 MB/s         |
-| Tectonic + Terralith | LinearReader (Zstd 4)  | 1.80 GB | 8.49x             | 735.8 MB/s        | 1742.8 MB/s         |
-| Tectonic + Terralith | LinearReader (Zstd 22) | 1.24 GB | 12.37x            | 4.4 MB/s          | 1787.3 MB/s         |
+| Dataset              | Format                 | Original | Compressed | Compression Ratio | Compression Speed | Decompression Speed |
+|----------------------|------------------------|----------|------------|-------------------|-------------------|---------------------|
+| Overworld            | Anvil/Zlib 6           | 9.51 GB  | 8.38 GB    | 5.44x             | 75.7 MB/s         | 1271.3 MB/s         |
+| Overworld            | LinearReader (Zstd 4)  | 9.51 GB  | 6.21 GB    | 7.39x             | 585.5 MB/s        | 1412.8 MB/s         |
+| Overworld            | LinearReader (Zstd 22) | 9.51 GB  | 4.28 GB    | 10.71x            | 4.4 MB/s          | 1589.2 MB/s         |
+| End (mostly void)    | Anvil/Zlib 6           | 2.33 GB  | 2.16 GB    | 3.66x             | 188.4 MB/s        | 1576.4 MB/s         |
+| End (mostly void)    | LinearReader (Zstd 4)  | 2.33 GB  | 244 MB     | 33.20x            | 1811.1 MB/s       | 4062.7 MB/s         |
+| End (mostly void)    | LinearReader (Zstd 22) | 2.33 Gb  | 141 MB     | 57.50x            | 10.1 MB/s         | 6166.9 MB/s         |
+| Tectonic + Terralith | Anvil/Zlib 6           | 2.89 GB  | 2.56 GB    | 5.97x             | 84.1 MB/s         | 1338.1 MB/s         |
+| Tectonic + Terralith | LinearReader (Zstd 4)  | 2.89 GB  | 1.80 GB    | 8.49x             | 735.8 MB/s        | 1742.8 MB/s         |
+| Tectonic + Terralith | LinearReader (Zstd 22) | 2.89 GB  | 1.24 GB    | 12.37x            | 4.4 MB/s          | 1787.3 MB/s         |
 
 As is shown in the above table, LinearReader + Zstd achieves better compression while still 
 maintaining fast compression and decompression speeds during normal gameplay, (Zstd 22 is used for 

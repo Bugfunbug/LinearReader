@@ -22,104 +22,104 @@ LinearReader's recompressor instead of Zstd.
 The following data was collected:
 ## Overworld
 ### Region
-| Format                | Size    | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|---------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 8.38 GB | 5.44x             | 75.7 MB/s         | 1271.3 MB/s         |
-| Zstd 4 (`.linear`)    | 6.21 GB | 7.39x             | 585.5 MB/s        | 1412.8 MB/s         |
-| Zstd 22 (`.linear`)   | 4.28 GB | 10.71x            | 4.4 MB/s          | 1589.2 MB/s         |
-| Brotli 11 (`.linear`) | 3.82 GB | 12.022x           | 0.8 MB/s          | 865.8 MB/s          |
+| Format                | Original | Compressed | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|------------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 9.21 GB  | 8.38 GB    | 5.44x             | 75.7 MB/s         | 1271.3 MB/s         |
+| Zstd 4 (`.linear`)    | 9.21 GB  | 6.21 GB    | 7.39x             | 585.5 MB/s        | 1412.8 MB/s         |
+| Zstd 22 (`.linear`)   | 9.21 GB  | 4.28 GB    | 10.71x            | 4.4 MB/s          | 1589.2 MB/s         |
+| Brotli 11 (`.linear`) | 9.21 GB  | 3.82 GB    | 12.022x           | 0.8 MB/s          | 865.8 MB/s          |
 
 ### Entities
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 211.84 MB | 0.452x            | 58.8 MB/s         | 199.8 MB/s          |
-| Zstd 4 (`.linear`)    | 7.25 MB   | 13.21x            | 789.6 MB/s        | 5420.7 MB/s         |
-| Zstd 22 (`.linear`)   | 6.69 MB   | 14.303x           | 2.5 MB/s          | 3458.9 MB/s         |
-| Brotli 11 (`.linear`) | 6.51 MB   | 14.704x           | 0.9 MB/s          | 1188.5 MB/s         |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 222.1 MB | 211.84 MB | 0.452x            | 58.8 MB/s         | 199.8 MB/s          |
+| Zstd 4 (`.linear`)    | 222.1 MB | 7.25 MB   | 13.21x            | 789.6 MB/s        | 5420.7 MB/s         |
+| Zstd 22 (`.linear`)   | 222.1 MB | 6.69 MB   | 14.303x           | 2.5 MB/s          | 3458.9 MB/s         |
+| Brotli 11 (`.linear`) | 222.1 MB | 6.51 MB   | 14.704x           | 0.9 MB/s          | 1188.5 MB/s         |
 
 ### Poi
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 68.49 MB  | 0.16x             | 30.1 MB/s         | 33.5 MB/s           |
-| Zstd 4 (`.linear`)    | 469.88 KB | 23.847x           | 800.1 MB/s        | 2045.5 MB/s         |
-| Zstd 22 (`.linear`)   | 403.22 KB | 27.789x           | 3.8 MB/s          | 1781.9 MB/s         |
-| Brotli 11 (`.linear`) | 379.36 KB | 29.536x           | 2.4 MB/s          | 562.2 MB/s          |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 73.9 MB  | 68.49 MB  | 0.16x             | 30.1 MB/s         | 33.5 MB/s           |
+| Zstd 4 (`.linear`)    | 73.9 MB  | 469.88 KB | 23.847x           | 800.1 MB/s        | 2045.5 MB/s         |
+| Zstd 22 (`.linear`)   | 73.9 MB  | 403.22 KB | 27.789x           | 3.8 MB/s          | 1781.9 MB/s         |
+| Brotli 11 (`.linear`) | 73.9 MB  | 379.36 KB | 29.536x           | 2.4 MB/s          | 562.2 MB/s          |
 
 ## Nether
 ### Region
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 1.23 GB   | 5.536x            | 77.2 MB/s         | 1272.8 MB/s         |
-| Zstd 4 (`.linear`)    | 834.15 MB | 8.388x            | 772.7 MB/s        | 1826.1 MB/s         |
-| Zstd 22 (`.linear`)   | 567.59 MB | 12.327x           | 4.5 MB/s          | 1887.5 MB/s         |
-| Brotli 11 (`.linear`) | 504.91 MB | 13.857x           | 0.9 MB/s          | 873.8 MB/s          |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 1.34 GB  | 1.23 GB   | 5.536x            | 77.2 MB/s         | 1272.8 MB/s         |
+| Zstd 4 (`.linear`)    | 1.34 GB  | 834.15 MB | 8.388x            | 772.7 MB/s        | 1826.1 MB/s         |
+| Zstd 22 (`.linear`)   | 1.34 GB  | 567.59 MB | 12.327x           | 4.5 MB/s          | 1887.5 MB/s         |
+| Brotli 11 (`.linear`) | 1.34 GB  | 504.91 MB | 13.857x           | 0.9 MB/s          | 873.8 MB/s          |
 
 ### Entities
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 26.91 MB  | 0.438x            | 54.5 MB/s         | 134.3 MB/s          |
-| Zstd 4 (`.linear`)    | 900.52 KB | 13.387x           | 1643 MB/s         | 4733.5 MB/s         |
-| Zstd 22 (`.linear`)   | 831.38 KB | 14.502x           | 2.2 MB/s          | 2661.8  MB/s        |
-| Brotli 11 (`.linear`) | 803.37 KB | 15.008x           | 1.0 MB/s          | 1011.5 MB/s         |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 28.2 MB  | 26.91 MB  | 0.438x            | 54.5 MB/s         | 134.3 MB/s          |
+| Zstd 4 (`.linear`)    | 28.2 MB  | 900.52 KB | 13.387x           | 1643 MB/s         | 4733.5 MB/s         |
+| Zstd 22 (`.linear`)   | 28.2 MB  | 831.38 KB | 14.502x           | 2.2 MB/s          | 2661.8  MB/s        |
+| Brotli 11 (`.linear`) | 28.2 MB  | 803.37 KB | 15.008x           | 1.0 MB/s          | 1011.5 MB/s         |
 
 ### Poi
-| Format                | Size    | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|---------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 2.02 MB | 0.998x            | 35.3 MB/s         | 30.7 MB/s           |
-| Zstd 4 (`.linear`)    | 4.92 KB | 419.43x           | 4942.7 MB/s       | 2591.5 MB/s         |
-| Zstd 22 (`.linear`)   | 4.67 KB | 442.522x          | 614.8 MB/s        | 2702.1 MB/s         |
-| Brotli 11 (`.linear`) | 3.39 KB | 608.325x          | 26.6 MB/s         | 655.1 MB/s          |
+| Format                | Original | Size    | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|---------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 12 KB    | 2.02 MB | 0.998x            | 35.3 MB/s         | 30.7 MB/s           |
+| Zstd 4 (`.linear`)    | 12 KB    | 4.92 KB | 419.43x           | 4942.7 MB/s       | 2591.5 MB/s         |
+| Zstd 22 (`.linear`)   | 12 KB    | 4.67 KB | 442.522x          | 614.8 MB/s        | 2702.1 MB/s         |
+| Brotli 11 (`.linear`) | 12 KB    | 3.39 KB | 608.325x          | 26.6 MB/s         | 655.1 MB/s          |
 
 ## End
 _Note: The End dimension is mostly void, leading to some really fast and small compression._
 ### Region
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 2.16 GB   | 3.655x            | 188.4 MB/s        | 2769.4 MB/s         |
-| Zstd 4 (`.linear`)    | 243.76 MB | 33.197x           | 1811.1 MB/s       | 6166.9 MB/s         |
-| Zstd 22 (`.linear`)   | 140.73 MB | 57.502x           | 10.1 MB/s         | 4062.7 MB/s         |
-| Brotli 11 (`.linear`) | 122.7 MB  | 65.954x           | 2.3 MB/s          | 1576.4 MB/s         |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 2.32 GB  | 2.16 GB   | 3.655x            | 188.4 MB/s        | 2769.4 MB/s         |
+| Zstd 4 (`.linear`)    | 2.32 GB  | 243.76 MB | 33.197x           | 1811.1 MB/s       | 6166.9 MB/s         |
+| Zstd 22 (`.linear`)   | 2.32 GB  | 140.73 MB | 57.502x           | 10.1 MB/s         | 4062.7 MB/s         |
+| Brotli 11 (`.linear`) | 2.32 GB  | 122.7 MB  | 65.954x           | 2.3 MB/s          | 1576.4 MB/s         |
 
 ### Entities
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 7.62 MB   | 0.715x            | 39.3 MB/s         | 38.3 MB/s           |
-| Zstd 4 (`.linear`)    | 170.45 KB | 32.718x           | 1930.4 MB/s       | 29.48.5 MB/s        |
-| Zstd 22 (`.linear`)   | 163.13 KB | 34.187x           | 9.3 MB/s          | 2542.4 MB/s         |
-| Brotli 11 (`.linear`) | 152.29 KB | 36.621x           | 2.8 MB/s          | 618.7 MB/s          |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 4.8 MB   | 7.62 MB   | 0.715x            | 39.3 MB/s         | 38.3 MB/s           |
+| Zstd 4 (`.linear`)    | 4.8 MB   | 170.45 KB | 32.718x           | 1930.4 MB/s       | 29.48.5 MB/s        |
+| Zstd 22 (`.linear`)   | 4.8 MB   | 163.13 KB | 34.187x           | 9.3 MB/s          | 2542.4 MB/s         |
+| Brotli 11 (`.linear`) | 4.8 MB   | 152.29 KB | 36.621x           | 2.8 MB/s          | 618.7 MB/s          |
 
 ### Poi
-| Format                | Size     | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 5.04 MB  | 0.956x            | 35.4 MB/s         | 31.4 MB/s           |
-| Zstd 4 (`.linear`)    | 18.63 KB | 264.979x          | 3568.7 MB/s       | 2680.1 MB/s         |
-| Zstd 22 (`.linear`)   | 17.81 KB | 277.171x          | 210 MB/s          | 2741.9 MB/s         |
-| Brotli 11 (`.linear`) | 14.52 KB | 339.989x          | 24.2 MB/s         | 645 MB/s            |
+| Format                | Original | Size     | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 844 KB   | 5.04 MB  | 0.956x            | 35.4 MB/s         | 31.4 MB/s           |
+| Zstd 4 (`.linear`)    | 844 KB   | 18.63 KB | 264.979x          | 3568.7 MB/s       | 2680.1 MB/s         |
+| Zstd 22 (`.linear`)   | 844 KB   | 17.81 KB | 277.171x          | 210 MB/s          | 2741.9 MB/s         |
+| Brotli 11 (`.linear`) | 844 KB   | 14.52 KB | 339.989x          | 24.2 MB/s         | 645 MB/s            |
 
 ## Terralith + Tectonic
 ### Region
-| Format                | Size    | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|---------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 2.56 GB | 5.967x            | 84.1 MB/s         | 1338.1 MB/s         |
-| Zstd 4 (`.linear`)    | 1.8 GB  | 8.492x            | 735.8 MB/s        | 1742.8 MB/s         |
-| Zstd 22 (`.linear`)   | 1.24 GB | 12.371x           | 4.4 MB/s          | 1787.3 MB/s         |
-| Brotli 11 (`.linear`) | 1.1 GB  | 13.916x           | 0.9 MB/s          | 951.3 MB/s          |
+| Format                | Original | Size    | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|---------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 2.79 GB  | 2.56 GB | 5.967x            | 84.1 MB/s         | 1338.1 MB/s         |
+| Zstd 4 (`.linear`)    | 2.79 GB  | 1.8 GB  | 8.492x            | 735.8 MB/s        | 1742.8 MB/s         |
+| Zstd 22 (`.linear`)   | 2.79 GB  | 1.24 GB | 12.371x           | 4.4 MB/s          | 1787.3 MB/s         |
+| Brotli 11 (`.linear`) | 2.79 GB  | 1.1 GB  | 13.916x           | 0.9 MB/s          | 951.3 MB/s          |
 
 ### Entities
-| Format                | Size     | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 61.61 MB | 0.424x            | 55.4 MB/s         | 169.7 MB/s          |
-| Zstd 4 (`.linear`)    | 2.02 MB  | 12.945x           | 693.4 MB/s        | 4734.1 MB/s         |
-| Zstd 22 (`.linear`)   | 1.87 MB  | 14.009x           | 2.6 MB/s          | 3240.3 MB/s         |
-| Brotli 11 (`.linear`) | 1.81 MB  | 14.446x           | 1 MB/s            | 1114.4 MB/s         |
+| Format                | Original | Size     | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 64.5 MB  | 61.61 MB | 0.424x            | 55.4 MB/s         | 169.7 MB/s          |
+| Zstd 4 (`.linear`)    | 64.5 MB  | 2.02 MB  | 12.945x           | 693.4 MB/s        | 4734.1 MB/s         |
+| Zstd 22 (`.linear`)   | 64.5 MB  | 1.87 MB  | 14.009x           | 2.6 MB/s          | 3240.3 MB/s         |
+| Brotli 11 (`.linear`) | 64.5 MB  | 1.81 MB  | 14.446x           | 1 MB/s            | 1114.4 MB/s         |
 
 ### Poi
-| Format                | Size      | Compression Ratio | Compression Speed | Decompression Speed |
-|-----------------------|-----------|-------------------|-------------------|---------------------|
-| Zlib 6 (`.mca`)       | 29.94 MB  | 0.151x            | 32.6 MB/s         | 39.3 MB/s           |
-| Zstd 4 (`.linear`)    | 239.37 KB | 19.342x           | 810.5 MB/s        | 2040.1 MB/s         |
-| Zstd 22 (`.linear`)   | 198.12 KB | 23.369x           | 3.3 MB/s          | 1666.7 MB/s         |
-| Brotli 11 (`.linear`) | 186.17 KB | 24.87x            | 2 MB/s            | 600.7 MB/s          |
+| Format                | Original | Size      | Compression Ratio | Compression Speed | Decompression Speed |
+|-----------------------|----------|-----------|-------------------|-------------------|---------------------|
+| Zlib 6 (`.mca`)       | 32.1 MB  | 29.94 MB  | 0.151x            | 32.6 MB/s         | 39.3 MB/s           |
+| Zstd 4 (`.linear`)    | 32.1 MB  | 239.37 KB | 19.342x           | 810.5 MB/s        | 2040.1 MB/s         |
+| Zstd 22 (`.linear`)   | 32.1 MB  | 198.12 KB | 23.369x           | 3.3 MB/s          | 1666.7 MB/s         |
+| Brotli 11 (`.linear`) | 32.1 MB  | 186.17 KB | 24.87x            | 2 MB/s            | 600.7 MB/s          |
 
 ## What the  Data Shows
 - LinearReader can destroy vanilla Minecraft in both size and compression/decompression speed.
