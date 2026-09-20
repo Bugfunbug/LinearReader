@@ -8,8 +8,16 @@ plugins {
 def targetProperties = new Properties()
 file('gradle.properties').withInputStream(targetProperties.&load)
 
+def sharedVersionsFile = (rootProject.file('modules/core').exists()
+        ? rootProject.projectDir
+        : projectDir.parentFile.parentFile.parentFile).toPath().resolve('versions.gradle.properties').toFile()
+def sharedVersionProperties = new Properties()
+if (sharedVersionsFile.exists()) {
+    sharedVersionsFile.withInputStream(sharedVersionProperties.&load)
+}
+
 def targetProperty = { String name ->
-    def value = targetProperties.getProperty(name)
+    def value = targetProperties.getProperty(name) ?: sharedVersionProperties.getProperty(name)
     if (value == null) {
         throw new GradleException("Missing target property '${name}' in ${projectDir}/gradle.properties")
     }
