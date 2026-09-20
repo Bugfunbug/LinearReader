@@ -14,7 +14,7 @@ public class FabricLinearConfig {
     public int compressionLevel = 4;
 
     /** Region files kept open in the cache. Higher is faster, lower uses less RAM. */
-    public int regionCacheSize = 256;
+    public int regionCacheSize = 128;
 
     /** Keep a .linear.bak in a backups/ folder next to each region file. */
     public boolean backupEnabled = true;

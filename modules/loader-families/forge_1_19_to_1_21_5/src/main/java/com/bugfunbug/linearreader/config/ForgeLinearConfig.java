@@ -55,9 +55,9 @@ public final class ForgeLinearConfig {
                         "Maximum number of region files kept open in the cache.",
                         "Higher = faster repeated access across many regions.",
                         "Lower = less RAM use, but more cache misses and disk reads.",
-                        "Default = 256"
+                        "Default = 128"
                 )
-                .defineInRange("regionCacheSize", 256, 8, 1024);
+                .defineInRange("regionCacheSize", 128, 8, 1024);
 
         BACKUP_ENABLED = builder
                 .comment(
