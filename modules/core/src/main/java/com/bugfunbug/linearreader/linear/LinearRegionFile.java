@@ -3,6 +3,7 @@ package com.bugfunbug.linearreader.linear;
 import com.bugfunbug.linearreader.LinearRuntime;
 import com.bugfunbug.linearreader.LinearStats;
 import com.bugfunbug.linearreader.StoragePolicyManager;
+import com.bugfunbug.linearreader.PlayerProximity;
 import com.bugfunbug.linearreader.config.LinearConfig;
 import com.bugfunbug.linearreader.minecraftapi.ChunkPosCompat;
 import net.minecraft.nbt.NbtIo;
@@ -22,6 +23,7 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Comparator;
 import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -91,6 +93,7 @@ public class LinearRegionFile {
 
     private final Path    path;
     private final Path    normalizedPath;
+    private final Path    dimensionRoot;
     private final boolean dsync;
 
     public final int regionX;
@@ -140,6 +143,8 @@ public class LinearRegionFile {
     public LinearRegionFile(Path path, boolean dsync) throws IOException {
         this.path  = path;
         this.normalizedPath = path.toAbsolutePath().normalize();
+        Path storageFolder = this.normalizedPath.getParent();
+        this.dimensionRoot = storageFolder != null ? storageFolder.getParent() : null;
         this.dsync = dsync;
 
         String[] parts = path.getFileName().toString().split("\\.");
@@ -355,13 +360,17 @@ public class LinearRegionFile {
         }
         if (!StoragePolicyManager.shouldStartResidentTrim(residentBytes, heapHeadroom, nowNs)) return;
 
-        candidates.sort(Comparator.comparingDouble(
-                (LinearRegionFile region) -> StoragePolicyManager.residentTrimPriority(
-                        region.normalizedPath,
-                        region.lastAccessNs,
-                        region.residentBytesEstimate(),
-                        nowNs
-                )).reversed());
+        java.util.Map<LinearRegionFile, Double> priorities = new IdentityHashMap<>();
+        for (LinearRegionFile candidate : candidates) {
+            priorities.put(candidate,
+                    StoragePolicyManager.residentTrimPriority(
+                            candidate.normalizedPath,
+                            candidate.lastAccessNs,
+                            candidate.residentBytesEstimate(),
+                            nowNs)
+                            * PlayerProximity.trimFactor(candidate.dimensionRoot, candidate.regionX, candidate.regionZ));
+        }
+        candidates.sort(Comparator.comparingDouble((LinearRegionFile region) -> priorities.get(region)).reversed());
         int trimLimit = Math.max(0, candidates.size() - StoragePolicyManager.residentTrimHotSet());
         int trimmedRegions = 0;
         long trimmedBytes = 0L;
@@ -461,6 +470,10 @@ public class LinearRegionFile {
 
     public boolean canEvictFromCache() {
         return !dirty && !flushing;
+    }
+
+    public boolean accessedWithin(long windowNs) {
+        return stateNowNs() - lastAccessNs < windowNs;
     }
 
     public boolean hasChunk(ChunkPos pos) {

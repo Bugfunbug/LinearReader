@@ -489,6 +489,10 @@ public final class StoragePolicyManager {
         return RESIDENT_BUDGET_BYTES;
     }
 
+    public static long recentAccessWindowNs() {
+        return RESIDENT_TRIM_RECENT_ACCESS_NS;
+    }
+
     public static long residentTargetBytes() {
         return snapshot.residentTargetBytes();
     }

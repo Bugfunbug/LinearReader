@@ -291,7 +291,10 @@ public final class LinearCommandRegistrar {
                 + "§7  Maint budget: §f" + policy.maintenanceBudgetFiles() + "\n"
                 + "§7  Resident target: §f" + fmtSize(policy.residentTargetBytes())
                 + "§7  Hot set: §f" + policy.residentHotSet()
-                + "§7  Pins: §f" + policy.pinnedRegionCount();
+                + "§7  Pins: §f" + policy.pinnedRegionCount() + "\n"
+                + "§7  Cache evictions: idle-far §f" + LinearRuntime.evictionsIdleFar()
+                + "§7  idle-near §f" + LinearRuntime.evictionsIdleNear()
+                + "§7  fallback §f" + LinearRuntime.evictionsFallback();
         ctx.getSource().sendSuccess(() -> Component.literal(msg), false);
         return 1;
     }

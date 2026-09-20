@@ -71,15 +71,7 @@ public abstract class RegionFileStorageMixin {
         LinearStats.recordCacheMiss();
 
         if (linearCache.size() >= DHPregenMonitor.effectiveCacheSize()) {
-            long evictKey = Long.MIN_VALUE;
-            for (long k : linearCache.keySet()) {
-                LinearRegionFile candidate = linearCache.get(k);
-                if (candidate != null
-                        && !LinearRuntime.isPinnedNormalized(candidate.getNormalizedPath())
-                        && candidate.canEvictFromCache()) {
-                    evictKey = k;
-                }
-            }
+            long evictKey = LinearRuntime.chooseEvictionKey(folder, linearCache);
             if (evictKey != Long.MIN_VALUE) {
                 LinearRegionFile evicted = linearCache.remove(evictKey);
                 RegionFile staleWrapper = regionCache.remove(evictKey);

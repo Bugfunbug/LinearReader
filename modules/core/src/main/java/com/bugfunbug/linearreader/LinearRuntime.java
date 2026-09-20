@@ -20,6 +20,9 @@ import net.minecraft.server.level.ServerPlayer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMaps;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Shared runtime/service layer for the 1.20.1 line.
@@ -437,6 +441,56 @@ public final class LinearRuntime {
                 + "priority-flushing {} to relieve memory pressure.", toFlush);
     }
 
+    private static final LongAdder EVICT_IDLE_FAR = new LongAdder();
+    private static final LongAdder EVICT_IDLE_NEAR = new LongAdder();
+    private static final LongAdder EVICT_FALLBACK = new LongAdder();
+
+    public static long evictionsIdleFar()  { return EVICT_IDLE_FAR.sum(); }
+    public static long evictionsIdleNear() { return EVICT_IDLE_NEAR.sum(); }
+    public static long evictionsFallback() { return EVICT_FALLBACK.sum(); }
+
+    /**
+     * Picks which cached region to evict, or Long.MIN_VALUE if nothing is evictable.
+     * Hard exclusions (pinned/dirty/flushing) are unchanged. Preference order:
+     *   1. idle region not near any player (LRU among them)
+     *   2. idle region near a player (LRU among them)
+     *   3. any evictable region (LRU) - identical to the old behavior
+     * "Idle" = not accessed within the resident-trim recent-access window.
+     * The map iterates MRU -> LRU, so the last match wins (same convention as before).
+     * Caller holds the storage lock; this touches no locks of its own.
+     */
+    public static long chooseEvictionKey(Path storageFolder, Long2ObjectMap<LinearRegionFile> cache) {
+        Path dimensionRoot = storageFolder == null
+                ? null
+                : storageFolder.toAbsolutePath().normalize().getParent();
+        long recentNs = StoragePolicyManager.recentAccessWindowNs();
+
+        long lruAny = Long.MIN_VALUE;
+        long lruIdleNear = Long.MIN_VALUE;
+        long lruIdleFar = Long.MIN_VALUE;
+        for (Long2ObjectMap.Entry<LinearRegionFile> entry : Long2ObjectMaps.fastIterable(cache)) {
+            LinearRegionFile candidate = entry.getValue();
+            if (candidate == null
+                    || isPinnedNormalized(candidate.getNormalizedPath())
+                    || !candidate.canEvictFromCache()) {
+                continue;
+            }
+            long key = entry.getLongKey();
+            lruAny = key;
+            if (candidate.accessedWithin(recentNs)) continue;
+            if (PlayerProximity.isNear(dimensionRoot, candidate.regionX, candidate.regionZ)) {
+                lruIdleNear = key;
+            } else {
+                lruIdleFar = key;
+            }
+        }
+
+        if (lruIdleFar != Long.MIN_VALUE)  { EVICT_IDLE_FAR.increment();  return lruIdleFar; }
+        if (lruIdleNear != Long.MIN_VALUE) { EVICT_IDLE_NEAR.increment(); return lruIdleNear; }
+        if (lruAny != Long.MIN_VALUE)      { EVICT_FALLBACK.increment();  return lruAny; }
+        return Long.MIN_VALUE;
+    }
+
     public static void queueDirtyRegionsForSave() {
         LinearRuntime instance = INSTANCE;
         if (instance == null
@@ -467,6 +521,7 @@ public final class LinearRuntime {
 
     public void onServerStopping() {
         CURRENT_SERVER = null;
+        PlayerProximity.clear();
         IdleRecompressor.shutdown();
         savePins();
         DHPregenMonitor.notifyServerStopping();
@@ -547,6 +602,7 @@ public final class LinearRuntime {
 
         tickCounter++;
         if (tickCounter % 20 == 0) {
+            PlayerProximity.refresh(CURRENT_SERVER);
             long nowNs = System.nanoTime();
             if (backgroundFlushesAllowed(nowNs)) {
                 List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
