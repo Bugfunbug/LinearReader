@@ -81,7 +81,9 @@ disk will likely not work. Mods that read chunk data from RAM will likely work.
 A list of compatible/incompatible mods can be found in the 
 [wiki](https://github.com/Bugfunbug/LinearReader/wiki/Getting-Started#modpacks).
 
-If you find a mod incompatibility, please create an [issue](https://github.com/Bugfunbug/LinearReader/issues/new).
+If you find a mod that is incompatible with LinearReader (and is not already listed as being 
+incompatible), please create an [issue](https://github.com/Bugfunbug/LinearReader/issues/new) on my 
+GitHub repo.
 
 ## Installation and Uninstallation
 To install, just download LinearReader off of [CurseForge](https://www.curseforge.com/minecraft/mc-mods/linearreader)
@@ -115,13 +117,14 @@ _Note: When using this repo's gradle files/wrappers, some of the  `.jar` files w
 MacOS._
 
 ## Development Status
-I intend for version 1.3.0 to be the last version of LinearReader.
+LinearReader 1.3.0 will probably be the last major update.
 
-I no longer plan to add to LinearReader anymore. However, I do plan to keep LinearReader up to date 
-with the latest Minecraft release for the near future.
+I no longer plan to add much to LinearReader anymore. However, I do plan to keep LinearReader up to 
+date with the latest Minecraft releases for the near future.
 
-I will still try to respond to GitHub issues, and hotfixes may happen if need be, but my intention 
-is for serious development of LinearReader (by me) to cease after releasing version 1.3.0.
+I will still try to respond to GitHub issues, and hotfixes or small updates may happen if need be, 
+but my intention is for serious development of LinearReader (by me) to cease after the release of 
+version 1.3.0.
 
 ## AI Disclaimer
 AI was used to code this mod. Everything is manually tested before a new release. If you run 
