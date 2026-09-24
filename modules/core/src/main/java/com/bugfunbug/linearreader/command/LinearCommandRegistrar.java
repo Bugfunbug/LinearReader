@@ -70,6 +70,8 @@ public final class LinearCommandRegistrar {
                                 .executes(LinearCommandRegistrar::executeSaveAll)
                                 .then(Commands.argument("zstdLevel", IntegerArgumentType.integer(1, 22))
                                         .executes(LinearCommandRegistrar::executeSaveAllWithLevel)))
+                        .then(Commands.literal("clear-cache")
+                                .executes(LinearCommandRegistrar::executeClearCache))
                         .then(Commands.literal("bench")
                                 .executes(LinearCommandRegistrar::executeBench)
                                 .then(Commands.literal("debug")
@@ -480,6 +482,14 @@ public final class LinearCommandRegistrar {
     private static int executeSaveAllWithLevel(CommandContext<CommandSourceStack> ctx) {
         int level = IntegerArgumentType.getInteger(ctx, "zstdLevel");
         return SaveAllRunner.start(ctx.getSource(), level);
+    }
+
+    // ---------------------------------------------------------------------------
+    // /linearreader clear-cache
+    // ---------------------------------------------------------------------------
+
+    private static int executeClearCache(CommandContext<CommandSourceStack> ctx) {
+        return ClearCacheRunner.start(ctx.getSource());
     }
 
     // ---------------------------------------------------------------------------

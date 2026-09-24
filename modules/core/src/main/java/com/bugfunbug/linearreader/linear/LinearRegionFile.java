@@ -317,7 +317,7 @@ public class LinearRegionFile {
         );
     }
 
-    private long releaseResidentDataIfPossible() {
+    public long releaseResidentDataIfPossible() {
         lock.writeLock().lock();
         try {
             if (!loaded || dirty || flushing || LinearRuntime.isPinnedNormalized(normalizedPath)) return 0L;
