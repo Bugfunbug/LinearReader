@@ -67,7 +67,7 @@ smooth.
 
 ## Made with Servers in Mind
 Being a server-side mod, LinearReader tries to be as helpful and informative for server admins 
-as possible. There are commands, such as `benchmark` and `health`, for seeing benchmarks and 
+as possible. There are commands, such as `bench` and `health`, for seeing benchmarks and 
 internal metrics, and a config file so that settings can be tailored to fit the server.
 
 _(LinearReader works on singleplayer too, and players in singleplayer have access to all the 
