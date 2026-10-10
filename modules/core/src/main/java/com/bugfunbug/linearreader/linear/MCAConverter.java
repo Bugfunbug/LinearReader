@@ -116,6 +116,7 @@ public final class MCAConverter {
             writeOk = true;
         } finally {
             LinearRegionFile.ALL_OPEN.remove(linear);
+            linear.releaseChunkData();
             if (!writeOk) {
                 try { Files.deleteIfExists(linearPath); } catch (IOException ignored) {}
             }
