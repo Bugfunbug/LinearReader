@@ -36,6 +36,7 @@ public final class ForgeLinearConfig {
     private static final ForgeConfigSpec.IntValue     PRUNE_MIN_REGION_QUIET_HOURS;
     private static final ForgeConfigSpec.ConfigValue<String> IDLE_RECOMPRESS_ALGORITHM;
     private static final ForgeConfigSpec.ConfigValue<String> BACKUP_COMPRESSION_ALGORITHM;
+    private static final ForgeConfigSpec.BooleanValue BACKUP_ON_CONVERT;
 
     static {
         ForgeConfigSpec.Builder builder = new ForgeConfigSpec.Builder();
@@ -215,6 +216,15 @@ public final class ForgeLinearConfig {
                         "Default = zstd"
                 )
                 .define("backupCompressionAlgorithm", "zstd");
+        BACKUP_ON_CONVERT = builder
+                .comment(
+                        "If true, a .linear.bak backup is queued for each region right after it",
+                        "is converted from .mca. If false, conversion skips backups (less CPU and",
+                        "disk work); the backup is created the next time that region is saved after a change.",
+                        "Only applies when backupEnabled = true.",
+                        "Default = true"
+                )
+                .define("backupOnConvert", true);
 
         SPEC = builder.build();
     }
@@ -249,5 +259,6 @@ public final class ForgeLinearConfig {
                 IDLE_RECOMPRESS_ALGORITHM.get(),
                 BACKUP_COMPRESSION_ALGORITHM.get()
         );
+        LinearConfig.setBackupOnConvert(BACKUP_ON_CONVERT.get());
     }
 }

@@ -136,6 +136,12 @@ public final class FabricConfigIO {
         addString(lines, "backupCompressionAlgorithm", config.backupCompressionAlgorithm,
                 "Which algorithm backups (.linear.bak files) use: zstd or brotli.",
                 "Default = zstd");
+        addBool(lines, "backupOnConvert", config.backupOnConvert,
+                "If true, a .linear.bak backup is queued right after each region is",
+                "converted from .mca. If false, conversion skips backups (less CPU and disk work);",
+                "the backup is created the next time that region is saved after a change.",
+                "Only applies when backupEnabled = true.",
+                "Default = true");
 
         try {
             Files.createDirectories(path.getParent());
@@ -184,6 +190,7 @@ public final class FabricConfigIO {
                     case "pruneMinRegionQuietHours" -> config.pruneMinRegionQuietHours = parseInt(key, value, config.pruneMinRegionQuietHours);
                     case "idleRecompressAlgorithm" -> config.idleRecompressAlgorithm = parseAlgorithm(key, value, config.idleRecompressAlgorithm);
                     case "backupCompressionAlgorithm" -> config.backupCompressionAlgorithm = parseAlgorithm(key, value, config.backupCompressionAlgorithm);
+                    case "backupOnConvert" -> config.backupOnConvert = parseBoolean(key, value, config.backupOnConvert);
                     default -> {}
                 }
             }

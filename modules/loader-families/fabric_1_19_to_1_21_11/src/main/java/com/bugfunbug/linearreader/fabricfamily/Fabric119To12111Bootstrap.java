@@ -61,5 +61,6 @@ public final class Fabric119To12111Bootstrap implements LoaderBootstrap {
                 cfg.idleRecompressAlgorithm,
                 cfg.backupCompressionAlgorithm
         );
+        LinearConfig.setBackupOnConvert(cfg.backupOnConvert);
     }
 }

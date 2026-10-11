@@ -70,6 +70,9 @@ public class FabricLinearConfig {
     /** Which algorithm backups use for cold storage: "zstd" or "brotli". */
     public String backupCompressionAlgorithm = "zstd";
 
+    /** If true, a backup is queued right after each .mca -> .linear conversion. */
+    public boolean backupOnConvert = true;
+
     /**
      * If true, converts every legacy .mca file in the world to .linear immediately
      * on startup, before the world becomes joinable. If false, conversion still

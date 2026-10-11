@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearRuntime;
+import com.bugfunbug.linearreader.config.LinearConfig;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 
@@ -112,7 +113,7 @@ public final class MCAConverter {
                 }
                 chunkData[i] = null; // release ASAP
             }
-            linear.flush();
+            linear.flush(LinearConfig.isBackupOnConvert());
             writeOk = true;
         } finally {
             LinearRegionFile.ALL_OPEN.remove(linear);

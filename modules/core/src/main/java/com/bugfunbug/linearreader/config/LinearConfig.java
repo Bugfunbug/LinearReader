@@ -43,6 +43,7 @@ public final class LinearConfig {
     private static volatile int     pruneMinRegionQuietHours = 12;
     private static volatile String  backupCompressionAlgorithm = ZSTD;
     private static volatile String  idleRecompressAlgorithm    = ZSTD;
+    private static volatile boolean backupOnConvert = true;
 
     // -------------------------------------------------------------------------
     // Getters — called everywhere in mod logic
@@ -71,6 +72,7 @@ public final class LinearConfig {
     public static long getPruneMinRegionQuietMs()     { return pruneMinRegionQuietHours * 3_600_000L; }
     public static String  getBackupCompressionAlgorithm() { return backupCompressionAlgorithm; }
     public static String  getIdleRecompressAlgorithm()    { return idleRecompressAlgorithm; }
+    public static boolean isBackupOnConvert()             { return backupOnConvert; }
 
 
     // -------------------------------------------------------------------------
@@ -122,6 +124,11 @@ public final class LinearConfig {
         LinearConfig.pruneMinRegionQuietHours = Math.max(0, pruneMinRegionQuietHours);
         LinearConfig.idleRecompressAlgorithm = normalizeAlgorithm(idleRecompressAlgorithm);
         LinearConfig.backupCompressionAlgorithm = normalizeAlgorithm(backupCompressionAlgorithm);
+    }
+
+    /** Pushed separately from update() so existing update(...) callers stay unchanged. */
+    public static void setBackupOnConvert(boolean backupOnConvert) {
+        LinearConfig.backupOnConvert = backupOnConvert;
     }
 
     /**
