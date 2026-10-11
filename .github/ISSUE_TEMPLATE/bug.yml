@@ -73,6 +73,13 @@ body:
     validations:
       required: true
   - type: textarea
+    id: hardware
+    attributes:
+      label: What are you playing on? And how?
+      placeholder: Yes, this is an important field.
+    validations:
+      required: true
+  - type: textarea
     id: bug-description
     attributes:
       label: What's the issue?
