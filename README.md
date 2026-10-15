@@ -82,8 +82,8 @@ A list of compatible/incompatible mods can be found in the
 [wiki](https://github.com/Bugfunbug/LinearReader/wiki/Getting-Started#modpacks).
 
 If you find a mod that is incompatible with LinearReader (and is not already listed as being 
-incompatible), please create an [issue](https://github.com/Bugfunbug/LinearReader/issues/new) on my 
-GitHub repo.
+incompatible), please create an [issue](https://github.com/Bugfunbug/LinearReader/issues/new/choose) 
+on my GitHub repo.
 
 ## Installation and Uninstallation
 To install, just download LinearReader off of [CurseForge](https://www.curseforge.com/minecraft/mc-mods/linearreader)
@@ -105,7 +105,7 @@ encourage reading the [wiki](https://github.com/Bugfunbug/LinearReader/wiki) to 
 understanding of all LinearReader has to offer.
 
 Additionally, you can ask a question on the GitHub repository by leaving an
-[issue](https://github.com/Bugfunbug/LinearReader/issues/new). You can also use the CurseForge 
+[issue](https://github.com/Bugfunbug/LinearReader/issues/new/choose). You can also use the CurseForge 
 comments section.
 
 ## Steps to Build from Source
@@ -132,7 +132,8 @@ version 1.3.0.
 
 ## AI Disclaimer
 AI was used to code this mod. Everything is manually tested before a new release. If you run 
-into any issues at all please report them on [GitHub](https://github.com/Bugfunbug/LinearReader/issues) 
+into any issues at all please report them on 
+[GitHub](https://github.com/Bugfunbug/LinearReader/issues/new/choose) 
 and I will try to resolve them as fast as possible.
 
 For more information regarding the use of AI in this mod, please refer to 
