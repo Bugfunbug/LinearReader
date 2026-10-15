@@ -104,6 +104,10 @@ This README does not provide a full, in depth explanation of all of LinearReader
 encourage reading the [wiki](https://github.com/Bugfunbug/LinearReader/wiki) to gain a full 
 understanding of all LinearReader has to offer.
 
+Additionally, you can ask a question on the GitHub repository by leaving an
+[issue](https://github.com/Bugfunbug/LinearReader/issues/new). You can also use the CurseForge 
+comments section.
+
 ## Steps to Build from Source
 1. Download the whole GitHub repository (including all the gradle wrappers and files).
 2. At the project root run `./gradlew buildAll collectJars`.
