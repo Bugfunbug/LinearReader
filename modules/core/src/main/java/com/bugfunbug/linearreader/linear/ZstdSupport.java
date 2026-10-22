@@ -1,6 +1,7 @@
 package com.bugfunbug.linearreader.linear;
 
 import com.bugfunbug.linearreader.LinearRuntime;
+import com.bugfunbug.linearreader.LinearStats;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,6 +39,15 @@ public final class ZstdSupport {
 
     static long compress(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level) {
         return bridge().compress(dst, dstOff, dstLen, src, srcOff, srcLen, level);
+    }
+
+    static long compressStream(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level) {
+        return bridge().compressStream(dst, dstOff, dstLen, src, srcOff, srcLen, level, Bridge.STREAM_SLICE_BYTES);
+    }
+
+    static long compressStream(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen,
+                               int level, int sliceBytes) {
+        return bridge().compressStream(dst, dstOff, dstLen, src, srcOff, srcLen, level, sliceBytes);
     }
 
     static long decompressedSize(byte[] src) {
@@ -202,7 +212,6 @@ public final class ZstdSupport {
             MethodHandle getErrorNameHandle = lookup.unreflect(
                             zstdClass.getMethod("getErrorName", long.class))
                     .asType(MethodType.methodType(String.class, long.class));
-
             MethodHandle compressCtxCtorHandle = lookup.unreflectConstructor(
                             compressCtxClass.getConstructor())
                     .asType(MethodType.methodType(Object.class));
@@ -216,7 +225,6 @@ public final class ZstdSupport {
                     .asType(MethodType.methodType(long.class, Object.class,
                             byte[].class, int.class, int.class,
                             byte[].class, int.class, int.class));
-
             MethodHandle decompressCtxCtorHandle = lookup.unreflectConstructor(
                             decompressCtxClass.getConstructor())
                     .asType(MethodType.methodType(Object.class));
@@ -227,6 +235,26 @@ public final class ZstdSupport {
                     .asType(MethodType.methodType(long.class, Object.class,
                             byte[].class, int.class, int.class,
                             byte[].class, int.class, int.class));
+
+            // Streaming compression - lets a single region's compress() call be broken into
+            // several smaller native calls that together produce ONE continuous zstd frame
+            // (identical output/ratio to one-shot compress()). This bounds how long any single
+            // JNI call can hold a critical section on a large array, instead of one call
+            // holding it for the ENTIRE region body (up to ~45MB+) at once.
+            Class<?> endDirectiveClass = Class.forName("com.github.luben.zstd.EndDirective", true, loader);
+            MethodHandle compressCtxStreamHandle = lookup.unreflect(
+                            compressCtxClass.getMethod("compressByteBufferStream",
+                                    java.nio.ByteBuffer.class, java.nio.ByteBuffer.class, endDirectiveClass))
+                    .asType(MethodType.methodType(boolean.class, Object.class,
+                            java.nio.ByteBuffer.class, java.nio.ByteBuffer.class, Object.class));
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Object endDirectiveContinue = Enum.valueOf((Class<Enum>) endDirectiveClass.asSubclass(Enum.class), "CONTINUE");
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            Object endDirectiveEnd = Enum.valueOf((Class<Enum>) endDirectiveClass.asSubclass(Enum.class), "END");
+
+            MethodHandle compressCtxSetPledgedSrcSizeHandle = lookup.unreflect(
+                            compressCtxClass.getMethod("setPledgedSrcSize", long.class))
+                    .asType(MethodType.methodType(void.class, Object.class, long.class));
 
             LinearRuntime.LOGGER.debug("[LinearReader] Loaded embedded zstd-jni from {}.", extractedJar);
             return new Bridge(
@@ -239,6 +267,10 @@ public final class ZstdSupport {
                     compressCtxCtorHandle,
                     compressCtxSetLevelHandle,
                     compressCtxCompressByteArrayHandle,
+                    compressCtxStreamHandle,
+                    endDirectiveContinue,
+                    endDirectiveEnd,
+                    compressCtxSetPledgedSrcSizeHandle,
                     decompressCtxCtorHandle,
                     decompressCtxDecompressByteArrayHandle
             );
@@ -269,6 +301,9 @@ public final class ZstdSupport {
     }
 
     private static final class Bridge {
+        /** Per-call cap on how much source data one native compress call is fed at once. */
+        private static final int STREAM_SLICE_BYTES = 4 * 1024 * 1024; // 4MB
+
         @SuppressWarnings("unused")
         private final URLClassLoader loader;
         private final MethodHandle compressBoundHandle;
@@ -279,6 +314,10 @@ public final class ZstdSupport {
         private final MethodHandle compressCtxCtorHandle;
         private final MethodHandle compressCtxSetLevelHandle;
         private final MethodHandle compressCtxCompressByteArrayHandle;
+        private final MethodHandle compressCtxStreamHandle;
+        private final Object endDirectiveContinue;
+        private final Object endDirectiveEnd;
+        private final MethodHandle compressCtxSetPledgedSrcSizeHandle;
         private final MethodHandle decompressCtxCtorHandle;
         private final MethodHandle decompressCtxDecompressByteArrayHandle;
         private final ThreadLocal<CompressContextState> compressContexts;
@@ -293,6 +332,10 @@ public final class ZstdSupport {
                        MethodHandle compressCtxCtorHandle,
                        MethodHandle compressCtxSetLevelHandle,
                        MethodHandle compressCtxCompressByteArrayHandle,
+                       MethodHandle compressCtxStreamHandle,
+                       Object endDirectiveContinue,
+                       Object endDirectiveEnd,
+                       MethodHandle compressCtxSetPledgedSrcSizeHandle,
                        MethodHandle decompressCtxCtorHandle,
                        MethodHandle decompressCtxDecompressByteArrayHandle) {
             this.loader = loader;
@@ -304,6 +347,10 @@ public final class ZstdSupport {
             this.compressCtxCtorHandle = compressCtxCtorHandle;
             this.compressCtxSetLevelHandle = compressCtxSetLevelHandle;
             this.compressCtxCompressByteArrayHandle = compressCtxCompressByteArrayHandle;
+            this.compressCtxStreamHandle = compressCtxStreamHandle;
+            this.endDirectiveContinue = endDirectiveContinue;
+            this.endDirectiveEnd = endDirectiveEnd;
+            this.compressCtxSetPledgedSrcSizeHandle = compressCtxSetPledgedSrcSizeHandle;
             this.decompressCtxCtorHandle = decompressCtxCtorHandle;
             this.decompressCtxDecompressByteArrayHandle = decompressCtxDecompressByteArrayHandle;
             this.compressContexts = ThreadLocal.withInitial(this::newCompressContextState);
@@ -331,6 +378,96 @@ public final class ZstdSupport {
             } catch (Throwable t) {
                 throw wrap("compressByteArray", t);
             }
+        }
+
+
+        /**
+         * Same output as {@link #compress}, but fed to the native encoder in bounded-size
+         * slices instead of one call covering the whole source. Produces one continuous zstd
+         * frame - identical ratio/output to one-shot compress() - just spread across several
+         * smaller native calls, so no single call can hold a JNI critical section open for
+         * the full duration a very large region body would otherwise require.
+         */
+        private long compressStream(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level, int sliceBytes) {
+            CompressContextState state = compressContexts.get();
+            state.applyLevel(level);
+            try {
+                java.nio.ByteBuffer dstBuf = java.nio.ByteBuffer.wrap(dst, dstOff, dstLen);
+                java.nio.ByteBuffer srcBuf = java.nio.ByteBuffer.wrap(src, srcOff, srcLen);
+                int fullLimit = srcOff + srcLen;
+
+                // Tell zstd the total size up front so the frame header records it, exactly like
+                // one-shot compress() does. Without this, decompressedSize() can't size the
+                // buffer on the read path. Must equal the total bytes fed below.
+                compressCtxSetPledgedSrcSizeHandle.invokeExact(state.context, (long) srcLen);
+
+                long[] sliceTimingsNs = (LinearStats.isEnabled() && sliceBytes >= STREAM_SLICE_BYTES) ? new long[64] : null;
+                int sliceIndex = 0;
+                while (srcBuf.position() < fullLimit) {
+                    int sliceLimit = Math.min(srcBuf.position() + Math.max(4096, sliceBytes), fullLimit);
+                    srcBuf.limit(sliceLimit);
+                    long sliceStartNs = sliceTimingsNs != null ? System.nanoTime() : 0L;
+                    boolean ignoredContinueFlush = (boolean) compressCtxStreamHandle.invokeExact(
+                            state.context, dstBuf, srcBuf, endDirectiveContinue);
+                    if (sliceTimingsNs != null && sliceIndex < sliceTimingsNs.length) {
+                        sliceTimingsNs[sliceIndex++] = System.nanoTime() - sliceStartNs;
+                    }
+                    srcBuf.limit(fullLimit);
+                }
+                if (sliceTimingsNs != null && sliceIndex > 0) {
+                    logSliceTimingsIfSlow(sliceTimingsNs, sliceIndex);
+                }
+
+                srcBuf.limit(srcBuf.position());
+                boolean flushed = (boolean) compressCtxStreamHandle.invokeExact(
+                        state.context, dstBuf, srcBuf, endDirectiveEnd);
+                while (!flushed) {
+                    flushed = (boolean) compressCtxStreamHandle.invokeExact(
+                            state.context, dstBuf, srcBuf, endDirectiveEnd);
+                }
+
+                return dstBuf.position() - dstOff;
+            } catch (Throwable t) {
+                throw wrap("compressByteBufferStream", t);
+            }
+        }
+
+
+        /**
+         * Logs a per-slice timing breakdown ONLY when at least one slice took noticeably
+         * longer than the rest - this tells us whether a slow compressStream() call is caused
+         * by ONE outlier native call (pointing at a discrete external event at that moment)
+         * or by every slice being uniformly slow (pointing at a sustained condition across
+         * the whole operation). Deliberately separate from the existing slow-save warning,
+         * which only reports the aggregate total.
+         */
+        private void logSliceTimingsIfSlow(long[] timingsNs, int count) {
+            long maxNs = 0L;
+            long sumNs = 0L;
+            int maxIndex = -1;
+            for (int i = 0; i < count; i++) {
+                sumNs += timingsNs[i];
+                if (timingsNs[i] > maxNs) {
+                    maxNs = timingsNs[i];
+                    maxIndex = i;
+                }
+            }
+            if (sumNs < 1_000_000_000L) return; // only log if the whole call was >= 1s total
+
+            double maxShareOfTotal = (double) maxNs / sumNs;
+            StringBuilder sb = new StringBuilder();
+            sb.append("[LinearReader] compressStream slice timing - ")
+                    .append(count).append(" slices, total=")
+                    .append(sumNs / 1_000_000L).append("ms, slowest=slice#")
+                    .append(maxIndex).append(" (").append(maxNs / 1_000_000L)
+                    .append("ms, ").append(String.format(java.util.Locale.ROOT, "%.0f", maxShareOfTotal * 100))
+                    .append("% of total), all slices(ms)=[");
+            for (int i = 0; i < count; i++) {
+                if (i > 0) sb.append(',');
+                sb.append(timingsNs[i] / 1_000_000L);
+            }
+            sb.append(']');
+            LinearRuntime.LOGGER.warn(sb.toString());
         }
 
         private long decompressedSize(byte[] src) {

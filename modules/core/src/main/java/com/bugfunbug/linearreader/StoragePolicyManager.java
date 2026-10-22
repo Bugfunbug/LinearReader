@@ -39,6 +39,9 @@ public final class StoragePolicyManager {
     private static final long TRICKLE_FLUSH_FLOOR_INTERVAL_NS = 1_000_000_000L; // fastest we'll ever go
     private static final int  TRICKLE_FLUSH_BACKLOG_SCALE = 40;                // dirty-region count to reach the floor
     private static final double TRICKLE_FLUSH_MAX_TICK_STRAIN = 0.35D;
+    private static final long TRICKLE_FLUSH_PRESSURE_MIN_QUIET_NS = 3_000_000_000L;   // 3s quiet when memory-pressured
+    private static final double TRICKLE_FLUSH_PRESSURE_MAX_TICK_STRAIN = 0.75D;        // looser ceiling under pressure
+    private static final int  TRICKLE_FLUSH_PRESSURE_MAX_CANDIDATES = 4;               // most regions queued per check under pressure
 
     private static final long PANIC_FLUSH_MIN_INTERVAL_NS = 250_000_000L; // at most ~4/sec, global
 
@@ -505,6 +508,33 @@ public final class StoragePolicyManager {
         return MIN_HEAP_HEADROOM_BYTES;
     }
 
+    private static final long EMERGENCY_FLUSH_HEADROOM_BYTES = computeEmergencyFlushHeadroomBytes();
+
+    /**
+     * Deliberately more generous than MIN_HEAP_HEADROOM_BYTES (the resident-trim
+     * threshold). Testing showed G1 itself naturally bottoms out around 7-9% heap
+     * headroom before self-triggering a GCLocker-forced collection - but that
+     * collection can only reclaim genuinely dead objects, never our dirty region
+     * cache (still referenced, so still "alive"). This threshold needs real
+     * margin above that natural floor so OUR flush - the only thing that can
+     * actually shrink that floor - gets a chance to run before G1 is already
+     * fighting for its life.
+     */
+    private static long computeEmergencyFlushHeadroomBytes() {
+        long maxHeap = Runtime.getRuntime().maxMemory();
+        if (maxHeap <= 0L || maxHeap == Long.MAX_VALUE) {
+            return 256L * 1024L * 1024L;
+        }
+        long headroom = maxHeap / 5L; // 20% of max heap
+        long min = 256L * 1024L * 1024L;
+        long max = 1536L * 1024L * 1024L;
+        return Math.max(min, Math.min(max, headroom));
+    }
+
+    public static boolean isCriticalMemoryPressure(long heapHeadroomBytes) {
+        return heapHeadroomBytes < EMERGENCY_FLUSH_HEADROOM_BYTES;
+    }
+
     public static void recordResidentTrim(int trimmedRegions, long trimmedBytes) {
         if (trimmedRegions <= 0 && trimmedBytes <= 0L) {
             return;
@@ -546,17 +576,34 @@ public final class StoragePolicyManager {
 
     static boolean shouldTrickleFlushSingleplayer(boolean dirty, boolean flushing,
                                                   long lastMutationNs, long nowNs,
-                                                  int dirtyRegionCount) {
+                                                  int dirtyRegionCount, boolean memoryPressure) {
         if (dedicatedServer) return false;
         if (!dirty || flushing) return false;
-        if (nowNs - lastMutationNs < TRICKLE_FLUSH_MIN_QUIET_NS) return false;
-        if (snapshot.tickStrain() > TRICKLE_FLUSH_MAX_TICK_STRAIN) return false;
+        long minQuietNs = memoryPressure ? TRICKLE_FLUSH_PRESSURE_MIN_QUIET_NS : TRICKLE_FLUSH_MIN_QUIET_NS;
+        if (nowNs - lastMutationNs < minQuietNs) return false;
+        double maxTickStrain = memoryPressure ? TRICKLE_FLUSH_PRESSURE_MAX_TICK_STRAIN : TRICKLE_FLUSH_MAX_TICK_STRAIN;
+        if (snapshot.tickStrain() > maxTickStrain) return false;
         return nowNs - LAST_TRICKLE_FLUSH_NS.get() >= trickleFlushIntervalNs(dirtyRegionCount);
     }
 
-    public static boolean shouldTrickleFlushSingleplayer(LinearRegionFile region, long nowNs, int dirtyRegionCount) {
+    public static boolean shouldTrickleFlushSingleplayer(LinearRegionFile region, long nowNs,
+                                                         int dirtyRegionCount, boolean memoryPressure) {
         return shouldTrickleFlushSingleplayer(region.isDirty(), region.isFlushing(),
-                region.lastMutationTimeNs(), nowNs, dirtyRegionCount);
+                region.lastMutationTimeNs(), nowNs, dirtyRegionCount, memoryPressure);
+    }
+
+    /**
+     * How many trickle-flush candidates may be queued in a single per-second check.
+     * Normally just 1, so singleplayer keeps flushing at a gentle, spaced-out pace.
+     * Under memory pressure (dirty resident data alone exceeds the resident budget),
+     * this scales up with backlog so a sustained write burst (e.g. elytra flight
+     * generating many new dirty regions per second) can actually drain instead of
+     * piling up in memory indefinitely.
+     */
+    static int trickleFlushCandidateLimit(int dirtyRegionCount, boolean memoryPressure) {
+        if (!memoryPressure) return 1;
+        double fraction = clamp(dirtyRegionCount / (double) TRICKLE_FLUSH_BACKLOG_SCALE, 0.0D, 1.0D);
+        return 1 + (int) Math.round((TRICKLE_FLUSH_PRESSURE_MAX_CANDIDATES - 1) * fraction);
     }
 
     /** Advances the trickle-flush rate limit. Call only after actually queuing a region. */

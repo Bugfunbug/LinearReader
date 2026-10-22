@@ -45,6 +45,23 @@ public final class IdleRecompressor {
 
     /** Zstd level used during idle/AFK recompression. */
     public static final int  TARGET_LEVEL      = 22;
+    /**
+     * Slice size for ultra-level (backup / idle recompress) zstd compression. One-shot compress pins the
+     * source and destination arrays in a JNI critical section for the WHOLE call, which at level 22 is
+     * many seconds, and the JVM cannot run a GC while any thread is inside one. Everything that
+     * allocates (render thread, server thread) stalls until it returns. Small slices release the
+     * critical section about every 40ms and produce the same single zstd frame.
+     */
+    private static final int ULTRA_COMPRESS_SLICE_BYTES = 128 * 1024;
+    /**
+     * Per-thread reusable buffers for ultra-level recompression: [0] = decompressed region body,
+     * [1] = compressed output. Without them every backup allocates two fresh ~20-46MB arrays, which
+     * G1 treats as "humongous" objects and which trigger extra concurrent GC cycles with long pauses.
+     * Only used when the caller passes reuseBuffers=true (the dedicated backup thread), so the
+     * idle-recompress workers don't each hold ~90MB permanently.
+     */
+    private static final ThreadLocal<byte[][]> TL_RECOMPRESS_BUFS =
+            ThreadLocal.withInitial(() -> new byte[2][]);
     /** Dimension folder this manual run is restricted to, or null for "all dimensions". */
     private static volatile Path MANUAL_DIMENSION_FILTER = null;
     /** Algorithm the currently-running manual recompression targets. */
@@ -544,6 +561,13 @@ public final class IdleRecompressor {
     static RecompressResult recompressFileTo(
             Path src, Path dst, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality)
             throws IOException {
+        return recompressFileTo(src, dst, targetAlgorithm, targetLevelOrQuality, false);
+    }
+
+    static RecompressResult recompressFileTo(
+            Path src, Path dst, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality,
+            boolean reuseBuffers)
+            throws IOException {
         LinearRegionFile.EncodedLinearFile encoded = LinearRegionFile.readEncodedLinearFile(src);
         if (encoded.headerSignature != LINEAR_SIGNATURE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
@@ -574,10 +598,36 @@ public final class IdleRecompressor {
         // shares the exact same logic LinearRegionFile's own read path uses,
         // so the two never drift out of sync with each other.
         byte[] body;
-        try {
-            body = LinearRegionFile.decompressEncodedLinearFile(src, encoded).bytes;
-        } catch (IOException e) {
-            return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+        int bodyLen;
+        if (reuseBuffers
+                && targetAlgorithm == CompressionAlgorithm.Algorithm.ZSTD
+                && current.algorithm() == CompressionAlgorithm.Algorithm.ZSTD) {
+            // Common backup case (live Zstd file -> Zstd backup): decompress straight into the
+            // per-thread reusable buffer instead of allocating a fresh array every time. Same Zstd
+            // decode steps as LinearRegionFile.decompressEncodedLinearFile. The array may be larger
+            // than the body, so bodyLen (not body.length) is the real size from here on.
+            long expected = ZstdSupport.decompressedSize(encoded.compressedBody, 0, encoded.compressedBodyLength);
+            if (expected <= 0 || expected > Integer.MAX_VALUE) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            bodyLen = (int) expected;
+            byte[][] pool = TL_RECOMPRESS_BUFS.get();
+            if (pool[0] == null || pool[0].length < bodyLen) {
+                pool[0] = new byte[bodyLen];
+            }
+            body = pool[0];
+            long decoded = ZstdSupport.decompress(body, 0, bodyLen,
+                    encoded.compressedBody, 0, encoded.compressedBodyLength);
+            if (ZstdSupport.isError(decoded) || decoded != expected) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+        } else {
+            try {
+                body = LinearRegionFile.decompressEncodedLinearFile(src, encoded).bytes;
+            } catch (IOException e) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            bodyLen = body.length;
         }
 
         // Recompress at the target algorithm/level.
@@ -599,9 +649,20 @@ public final class IdleRecompressor {
             out = new byte[32 + newLen + 8];
             System.arraycopy(compressed, 0, out, 32, newLen);
         } else {
-            int maxCompLen = (int) ZstdSupport.compressBound(body.length);
-            byte[] outBuf = new byte[32 + maxCompLen + 8];
-            long written = ZstdSupport.compress(outBuf, 32, maxCompLen, body, 0, body.length, targetLevelOrQuality);
+            int maxCompLen = (int) ZstdSupport.compressBound(bodyLen);
+            int outCapacity = 32 + maxCompLen + 8;
+            byte[] outBuf;
+            if (reuseBuffers) {
+                byte[][] outPool = TL_RECOMPRESS_BUFS.get();
+                if (outPool[1] == null || outPool[1].length < outCapacity) {
+                    outPool[1] = new byte[outCapacity];
+                }
+                outBuf = outPool[1];
+            } else {
+                outBuf = new byte[outCapacity];
+            }
+            long written = ZstdSupport.compressStream(outBuf, 32, maxCompLen, body, 0, bodyLen,
+                    targetLevelOrQuality, ULTRA_COMPRESS_SLICE_BYTES);
             if (ZstdSupport.isError(written)) return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
             newLen = (int) written;
             if (src.equals(dst) && newLen >= compBodyLen) {

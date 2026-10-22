@@ -31,6 +31,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.function.IntSupplier;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -48,7 +49,7 @@ import java.util.stream.Stream;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Shared runtime/service layer for the 1.20.1 line.
+ * Shared runtime/service layer.
  *
  * Loader entrypoints should only bootstrap config and wire lifecycle events into
  * this class. All storage-facing runtime behavior lives here.
@@ -64,6 +65,9 @@ public final class LinearRuntime {
 
     /** Absolute paths of pinned region files. Populated from disk on server start. */
     private static final Set<Path> PINNED_PATHS = ConcurrentHashMap.newKeySet();
+
+    /** One IntSupplier per open RegionFileStorage — evicts everything currently evictable, returns count evicted. */
+    private static final Set<IntSupplier> STORAGE_CACHES = ConcurrentHashMap.newKeySet();
 
     /** World root path — set on server start, used by commands and pin persistence. */
     private static volatile Path worldRoot;
@@ -190,6 +194,18 @@ public final class LinearRuntime {
 
     public static void onRegionStorageOpened(Path regionFolder) {
         minecraftFamily().regionStorageHooks().onStorageOpened(regionFolder);
+    }
+
+    public static void registerStorageCache(IntSupplier evictAll) {
+        STORAGE_CACHES.add(evictAll);
+    }
+
+    public static int clearAllStorageCaches() {
+        int total = 0;
+        for (IntSupplier cache : STORAGE_CACHES) {
+            total += cache.getAsInt();
+        }
+        return total;
     }
 
     public static Path resolveLinearRegionPath(Path regionFolder, ChunkPos chunkPos) {
@@ -345,7 +361,7 @@ public final class LinearRuntime {
         serverStartNs = System.nanoTime();
         inFlightFlushes = Collections.newSetFromMap(new ConcurrentHashMap<>());
         final int threadCount = dedicatedServer ? 2 : 1;
-        final int threadPriority = dedicatedServer ? Thread.NORM_PRIORITY - 1 : Thread.MIN_PRIORITY + 1;
+        final int threadPriority = dedicatedServer ? Thread.NORM_PRIORITY - 1 : Thread.NORM_PRIORITY - 1;
         flushExecutor = Executors.newFixedThreadPool(threadCount, r -> {
             Thread t = new Thread(r, "linearreader-flush-" + FLUSH_THREAD_N.incrementAndGet());
             t.setDaemon(true);
@@ -604,7 +620,37 @@ public final class LinearRuntime {
         if (tickCounter % 20 == 0) {
             PlayerProximity.refresh(CURRENT_SERVER);
             long nowNs = System.nanoTime();
-            if (backgroundFlushesAllowed(nowNs)) {
+
+            Runtime jvmRuntime = Runtime.getRuntime();
+            long heapHeadroom = jvmRuntime.maxMemory() - (jvmRuntime.totalMemory() - jvmRuntime.freeMemory());
+            if (StoragePolicyManager.isCriticalMemoryPressure(heapHeadroom)) {
+                List<LinearRegionFile> emergencyCandidates = new ArrayList<>();
+                for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
+                    if (region.isDirty() && !region.isFlushing() && !queuedRegions.contains(region)) {
+                        emergencyCandidates.add(region);
+                    }
+                }
+                if (!emergencyCandidates.isEmpty()) {
+                    emergencyCandidates.sort(java.util.Comparator
+                            .comparingLong(LinearRegionFile::estimateRamBytes)
+                            .reversed());
+                    int emergencyLimit = Math.min(emergencyCandidates.size(), 8);
+                    int queuedNow = 0;
+                    for (int i = 0; i < emergencyLimit; i++) {
+                        if (queueRegion(emergencyCandidates.get(i))) {
+                            queuedNow++;
+                        }
+                    }
+                    if (queuedNow > 0) {
+                        LOGGER.warn("[LinearReader] Critical memory pressure detected ({}MB heap headroom) - "
+                                        + "force-flushing {} of the largest dirty region(s) immediately, "
+                                        + "bypassing normal throttling.",
+                                heapHeadroom / (1024 * 1024), queuedNow);
+                    }
+                }
+            }
+
+                if (backgroundFlushesAllowed(nowNs)) {
                 List<LinearRegionFile> dirtyCandidates = new ArrayList<>();
                 List<LinearRegionFile> trickleCandidates = new ArrayList<>();
                 int dirtyCount = 0;
@@ -642,20 +688,44 @@ public final class LinearRuntime {
                 }
 
                 if (!trickleCandidates.isEmpty()) {
-                    LinearRegionFile best = null;
-                    double bestPriority = Double.NEGATIVE_INFINITY;
+                    long trickleResidentBytes = 0L;
                     for (LinearRegionFile candidate : trickleCandidates) {
-                        if (!StoragePolicyManager.shouldTrickleFlushSingleplayer(candidate, nowNs, dirtyCount)) {
-                            continue;
-                        }
-                        double priority = StoragePolicyManager.pressureFlushPriority(candidate, nowNs);
-                        if (priority > bestPriority) {
-                            bestPriority = priority;
-                            best = candidate;
+                        trickleResidentBytes += candidate.estimateRamBytes();
+                    }
+                    boolean memoryPressure = trickleResidentBytes > StoragePolicyManager.residentBudgetBytes();
+
+                    List<LinearRegionFile> eligible = new ArrayList<>();
+                    for (LinearRegionFile candidate : trickleCandidates) {
+                        if (StoragePolicyManager.shouldTrickleFlushSingleplayer(
+                                candidate, nowNs, dirtyCount, memoryPressure)) {
+                            eligible.add(candidate);
                         }
                     }
-                    if (best != null && queueRegion(best)) {
-                        StoragePolicyManager.noteTrickleFlush(nowNs);
+
+                    if (!eligible.isEmpty()) {
+                        // Compute each candidate's priority exactly once - a Comparator lambda
+                        // that calls pressureFlushPriority(...) directly recomputes it on every
+                        // pairwise comparison during sort(), which gets expensive once "eligible"
+                        // is large (e.g. under a loosened quiet threshold where most dirty regions
+                        // qualify at once). Precomputing avoids adding CPU overhead on the Server
+                        // thread - the exact thread this change exists to protect.
+                        java.util.Map<LinearRegionFile, Double> priorities = new IdentityHashMap<>(eligible.size());
+                        for (LinearRegionFile region : eligible) {
+                            priorities.put(region, StoragePolicyManager.pressureFlushPriority(region, nowNs));
+                        }
+                        eligible.sort(java.util.Comparator
+                                .comparingDouble((LinearRegionFile region) -> priorities.get(region))
+                                .reversed());
+                        int limit = StoragePolicyManager.trickleFlushCandidateLimit(dirtyCount, memoryPressure);
+                        int queued = 0;
+                        for (int i = 0; i < eligible.size() && queued < limit; i++) {
+                            if (queueRegion(eligible.get(i))) {
+                                queued++;
+                            }
+                        }
+                        if (queued > 0) {
+                            StoragePolicyManager.noteTrickleFlush(nowNs);
+                        }
                     }
                 }
             }

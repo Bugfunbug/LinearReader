@@ -27,6 +27,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.zip.CRC32;
 
@@ -85,6 +86,12 @@ public class LinearRegionFile {
     // Throttle the disk-space syscall to at most once per minute per flush thread.
     private static final ThreadLocal<Long> TL_LAST_DISK_CHECK =
             ThreadLocal.withInitial(() -> 0L);
+
+    // Rate-limits the proactive idle-resident-release scan below - independent of the
+    // pressure-gated trim's own timer, so it can't be starved out by pressure-trim activity.
+    private static final AtomicLong LAST_IDLE_RELEASE_NS = new AtomicLong(0L);
+    private static final long IDLE_RELEASE_SCAN_INTERVAL_NS = 5_000_000_000L; // 5s
+
     private static volatile Long testStateNowNs;
     private static volatile Long testStateNowMs;
 
@@ -340,7 +347,43 @@ public class LinearRegionFile {
         }
     }
 
+    /**
+     * Proactively releases resident chunk data from any clean, idle, unpinned region,
+     * independent of overall heap/resident-byte pressure. The pressure-gated pass below
+     * only ever runs once total resident memory is ALREADY high (and stops as soon as it
+     * dips back under target), so a region that's been idle and clean for a while can
+     * otherwise sit fully resident for minutes just because the aggregate cache never
+     * happened to cross the pressure threshold. Vanilla Anvil never retains this kind of
+     * data at all once a chunk is saved; this keeps LinearReader's baseline footprint
+     * closer to that instead of only reacting once already under strain.
+     *
+     * Rate-limited to its own cadence since trimResidentDataCache() is called very often
+     * (every chunk read/write) and a full ALL_OPEN scan every single call would add real
+     * overhead under heavy load.
+     */
+    private static void releaseIdleResidentDataProactively(@Nullable LinearRegionFile keep) {
+        long nowNs = stateNowNs();
+        long lastScanNs = LAST_IDLE_RELEASE_NS.get();
+        if (nowNs - lastScanNs < IDLE_RELEASE_SCAN_INTERVAL_NS) return;
+        if (!LAST_IDLE_RELEASE_NS.compareAndSet(lastScanNs, nowNs)) return;
+
+        int releasedRegions = 0;
+        long releasedBytes = 0L;
+        for (LinearRegionFile region : ALL_OPEN) {
+            if (region == keep || !region.isResidentTrimCandidate()) continue;
+            long freed = region.releaseResidentDataIfPossible();
+            if (freed <= 0L) continue;
+            releasedRegions++;
+            releasedBytes += freed;
+        }
+        if (releasedRegions > 0 || releasedBytes > 0L) {
+            StoragePolicyManager.recordResidentTrim(releasedRegions, releasedBytes);
+        }
+    }
+
     private static void trimResidentDataCache(@Nullable LinearRegionFile keep) {
+        releaseIdleResidentDataProactively(keep);
+
         long nowNs = stateNowNs();
         Runtime runtime = Runtime.getRuntime();
         long maxHeap = runtime.maxMemory();
@@ -973,7 +1016,7 @@ public class LinearRegionFile {
         byte[] out = bufs[1];
 
         long compressStartNs = System.nanoTime();
-        long   compLen       = ZstdSupport.compress(out, 32, maxCompLen, body, 0, bodySize, compressionLevel);
+        long   compLen       = ZstdSupport.compressStream(out, 32, maxCompLen, body, 0, bodySize, compressionLevel);
         if (ZstdSupport.isError(compLen))
             throw new IOException("[LinearReader] Zstd compression error: " + ZstdSupport.getErrorName(compLen));
         long compressNs = System.nanoTime() - compressStartNs;
@@ -1154,7 +1197,7 @@ public class LinearRegionFile {
             getBackupExecutor().submit(() -> {
                 try {
                     CompressionAlgorithm.Algorithm algorithm = resolveBackupAlgorithm();
-                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm));
+                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm), true);
                     completeBackupTask(scheduledMutationVersion);
                     LinearRuntime.LOGGER.debug("[LinearReader] Created backup: {}", bak.getFileName());
                 } catch (IOException e) {
@@ -1189,7 +1232,7 @@ public class LinearRegionFile {
             getBackupExecutor().submit(() -> {
                 try {
                     CompressionAlgorithm.Algorithm algorithm = resolveBackupAlgorithm();
-                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm));
+                    IdleRecompressor.recompressFileTo(src, bak, algorithm, resolveBackupTargetLevelOrQuality(algorithm),true);
                     completeBackupTask(scheduledMutationVersion);
                     LinearRuntime.LOGGER.debug("[LinearReader] Refreshed backup: {} ({} changed chunk(s), {} changed byte(s))",
                             bak.getFileName(), changedChunkCount, changedBytes);

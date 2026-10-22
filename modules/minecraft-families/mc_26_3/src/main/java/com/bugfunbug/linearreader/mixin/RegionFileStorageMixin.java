@@ -51,6 +51,7 @@ public abstract class RegionFileStorageMixin {
             if (linearCache == null) {
                 linearCache = new Long2ObjectLinkedOpenHashMap<>();
                 LinearRuntime.onRegionStorageOpened(folder);
+                LinearRuntime.registerStorageCache(this::evictAllCached);
             }
         }
     }
@@ -92,6 +93,38 @@ public abstract class RegionFileStorageMixin {
         LinearRegionFile region = new LinearRegionFile(linearPath, sync);
         linearCache.putAndMoveToFirst(key, region);
         return region;
+    }
+
+
+    @Unique
+    private int evictAllCached() {
+        List<Long> keys;
+        synchronized (this) {
+            keys = new ArrayList<>(linearCache.keySet());
+        }
+
+        int evicted = 0;
+        for (long key : keys) {
+            LinearRegionFile region;
+            synchronized (this) {
+                region = linearCache.get(key);
+                if (region == null
+                        || !region.canEvictFromCache()
+                        || LinearRuntime.isPinnedNormalized(region.getNormalizedPath())) {
+                    continue;
+                }
+                linearCache.remove(key);
+                RegionFile staleWrapper = regionCache.remove(key);
+                if (staleWrapper != null) {
+                    try {
+                        staleWrapper.close();
+                    } catch (IOException ignored) {}
+                }
+            }
+            LinearRuntime.submitFlush(region);
+            evicted++;
+        }
+        return evicted;
     }
 
     /**

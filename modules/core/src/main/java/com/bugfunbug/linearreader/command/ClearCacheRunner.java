@@ -52,10 +52,8 @@ public final class ClearCacheRunner {
     }
 
     private static void run(CommandSourceStack source) {
-        List<LinearRegionFile> snapshot = new ArrayList<>(LinearRegionFile.ALL_OPEN);
-
         List<LinearRegionFile> dirtyRegions = new ArrayList<>();
-        for (LinearRegionFile region : snapshot) {
+        for (LinearRegionFile region : LinearRegionFile.ALL_OPEN) {
             if (region.isDirty()) {
                 dirtyRegions.add(region);
             }
@@ -71,26 +69,11 @@ public final class ClearCacheRunner {
             }
         }
 
-        int freedRegions = 0;
-        long freedBytes = 0L;
-        int skipped = 0;
-        for (LinearRegionFile region : snapshot) {
-            // Re-checked internally (dirty/flushing/pinned) - a region that got
-            // touched again between the flush above and here is simply skipped,
-            // never forced. That's the same tolerance the automatic trim pass has.
-            long freed = region.releaseResidentDataIfPossible();
-            if (freed > 0L) {
-                freedRegions++;
-                freedBytes += freed;
-            } else {
-                skipped++;
-            }
-        }
+        int evicted = LinearRuntime.clearAllStorageCaches();
 
         send(source, "§a[LinearReader] clear-cache complete - flushed §f" + dirtyRegions.size()
-                + "§a dirty region(s), freed resident RAM for §f" + freedRegions
-                + "§a region(s) (" + formatBytes(freedBytes) + ")"
-                + (skipped > 0 ? " §7(" + skipped + " region(s) skipped - pinned/dirty/flushing)" : ""));
+                + "§a dirty region(s), evicted §f" + evicted
+                + "§a region(s) from the cache entirely (pinned regions are left alone).");
     }
 
     private static String formatBytes(long bytes) {
