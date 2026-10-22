@@ -445,12 +445,12 @@ public class LinearRegionFile {
             double dirtyDebt = dirty
                     ? StoragePolicyManager.dirtyDebtScore(Math.max(0L, nowNs - lastMutationNs))
                     : 0.0D;
-            double backupDebt = StoragePolicyManager.backupDebtScore(
+            double backupDebt = LinearConfig.isBackupEnabled() ? StoragePolicyManager.backupDebtScore(
                     changedChunksSinceBackup.cardinality(),
                     changedBytesSinceBackup,
                     backedUp,
-                    backupRefreshQueued
-            );
+                    backupRefreshQueued)
+            : 0.0D;
             return new MaintenanceDebtSnapshot(dirtyDebt, backupDebt);
         } finally {
             lock.readLock().unlock();
