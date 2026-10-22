@@ -112,6 +112,8 @@ tasks.withType(JavaCompile).configureEach {
                 details.file == rootProject.file(
                 'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110ChunkNbtAdapter.java') ||
                 details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110Family.java') ||
+                details.file == rootProject.file(
                 'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
                 details.file == rootProject.file(
                 'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileStorageMixin.java')
@@ -169,6 +171,8 @@ tasks.named('sourcesJar', Jar).configure {
                 'modules/core/src/main/java/com/bugfunbug/linearreader/linear/LinearBackedRegionFile.java') ||
                 details.file == rootProject.file(
                 'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110ChunkNbtAdapter.java') ||
+                details.file == rootProject.file(
+                'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mc1215to12110/Minecraft1215To12110Family.java') ||
                 details.file == rootProject.file(
                 'modules/minecraft-families/mc_1_21_5_to_1_21_10/src/main/java/com/bugfunbug/linearreader/mixin/RegionFileMixin.java') ||
                 details.file == rootProject.file(
