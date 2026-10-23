@@ -5,6 +5,8 @@ import com.bugfunbug.linearreader.minecraftapi.MinecraftFamily;
 import com.bugfunbug.linearreader.minecraftapi.RegionStorageHooks;
 import com.bugfunbug.linearreader.minecraftapi.WorldPathResolver;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 
 public final class Minecraft1201Family implements MinecraftFamily {
 
@@ -33,5 +35,10 @@ public final class Minecraft1201Family implements MinecraftFamily {
         // reflection-based default in MinecraftFamily, whose string literal
         // "hasPermission" is never rewritten by Loom in production jars.
         return source.hasPermission(2);
+    }
+
+    @Override
+    public boolean isSingleplayerOwner(MinecraftServer server, ServerPlayer player){
+        return server.isSingleplayerOwner(player.getGameProfile());
     }
 }
