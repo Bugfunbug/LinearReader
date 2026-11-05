@@ -77,14 +77,15 @@ public final class IdleRecompressor {
     // Region folders registered as each RegionFileStorage opens.
     private static final Set<Path> KNOWN_FOLDERS = ConcurrentHashMap.newKeySet();
 
-    /**
-     * How many region files may compress concurrently. Kept small and
-     * hardcoded rather than config-driven - Brotli quality 11 is CPU-heavy
-     * per file, and this pool only ever runs during otherwise-idle periods
-     * (gated by StoragePolicyManager.maintenanceBudgetFiles()/quietness)
-     * anyway. Bump this constant directly if you want 3 instead of 2.
-     */
-    private static final int PARALLEL_RECOMPRESS_SLOTS = 2;
+    // How many region files may compress concurrently. Kept small and
+    // hardcoded rather than config-driven - Brotli quality 11 is CPU-heavy
+    // per file, and this pool only ever runs during otherwise-idle periods
+    // (gated by StoragePolicyManager.maintenanceBudgetFiles()/quietness)
+    // anyway.
+    /** Max heaps below this count as "small": one recompress worker and no persistent backup buffers. */
+    private static final long SMALL_HEAP_BYTES = 1536L * 1024L * 1024L;
+    private static final boolean SMALL_HEAP = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES;
+    private static final int PARALLEL_RECOMPRESS_SLOTS = SMALL_HEAP ? 1 : 2;
 
     private static volatile ExecutorService recompressExecutor = createRecompressExecutor();
     private static final Semaphore RECOMPRESS_SLOTS = new Semaphore(PARALLEL_RECOMPRESS_SLOTS);
@@ -175,6 +176,10 @@ public final class IdleRecompressor {
     /** Starts the daemon thread that watches for idleness. Call once at mod init. */
     public static void startAutoDetector() {
         LAST_IO_MS.set(System.currentTimeMillis());
+        if (SMALL_HEAP) {
+            LinearRuntime.LOGGER.info("[LinearReader] Small heap detected ({} MB max) - using one recompression worker and no persistent backup buffers.",
+                    Runtime.getRuntime().maxMemory() / (1024L * 1024L));
+        }
         Thread existing = DETECTOR;
         if (existing != null && existing.isAlive()) return;
 
@@ -568,6 +573,7 @@ public final class IdleRecompressor {
             Path src, Path dst, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality,
             boolean reuseBuffers)
             throws IOException {
+        reuseBuffers = reuseBuffers && !SMALL_HEAP;
         if (targetAlgorithm == CompressionAlgorithm.Algorithm.ZSTD
                 && !ZstdSupport.isStreamingSupported()
                 && targetLevelOrQuality > ZstdSupport.FALLBACK_ONE_SHOT_MAX_LEVEL) {
