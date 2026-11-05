@@ -399,7 +399,7 @@ public final class LinearRuntime {
         instance.flushExecutor.submit(() -> {
             try {
                 region.flush(true);
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
                 LOGGER.error("[LinearReader] Async eviction flush failed for {}: {}",
                         region, e.getMessage(), e);
             } finally {
@@ -449,7 +449,7 @@ public final class LinearRuntime {
         instance.flushExecutor.submit(() -> {
             try {
                 toFlush.flush(true);
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
                 LOGGER.warn("[LinearReader] Panic flush failed for {}: {}", toFlush, e.getMessage());
             }
         });
@@ -747,7 +747,7 @@ public final class LinearRuntime {
             flushExecutor.submit(() -> {
                 try {
                     region.flush(true);
-                } catch (IOException e) {
+                } catch (IOException | RuntimeException e) {
                     LOGGER.error("[LinearReader] Async flush failed for {}: {}",
                             region, e.getMessage(), e);
                 } finally {

@@ -140,7 +140,7 @@ public final class LinearExporter {
         int failed = FILES_FAILED.get();
         if (failed == 0) {
             LinearRuntime.LOGGER.info(
-                    "[LinearReader] Export complete: {} file(s) written to {}",
+                    "[LinearReader] Export complete: {} file(s) written to {}. This folder holds region files only - copy level.dat, playerdata, data, datapacks, advancements and stats from the original world into it to make a complete world.",
                     done, exportRoot);
         } else {
             LinearRuntime.LOGGER.warn(

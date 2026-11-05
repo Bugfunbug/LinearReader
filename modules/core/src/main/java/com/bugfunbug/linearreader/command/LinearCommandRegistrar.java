@@ -761,7 +761,8 @@ public final class LinearCommandRegistrar {
         if (!LinearExporter.isRunning()) {
             ctx.getSource().sendSuccess(() -> Component.literal(
                             "§7[LinearReader] No export running. Use '§flinearreader export-mca start§7' to begin.\n"
-                                    + "§8Output: <worldname>_mca_export/ — .linear files are never modified."),
+                                    + "§8Output: <worldname>_mca_export/ - .linear files are never modified.\n"
+                                    + "§8Region files only (region, entities, poi). Copy level.dat, playerdata, data, datapacks, advancements and stats from your original world into the export folder yourself."),
                     false);
             return 0;
         }
@@ -792,7 +793,8 @@ public final class LinearCommandRegistrar {
         }
         ctx.getSource().sendSuccess(() -> Component.literal(
                         "§a[LinearReader] Export started. Output: §f<worldname>_mca_export/\n"
-                                + "§7Progress: §f/linearreader export-mca"),
+                                + "§7Progress: §f/linearreader export-mca\n"
+                                + "§8Region files only - copy level.dat, playerdata, data, datapacks, advancements and stats from your original world into the export folder yourself."),
                 false);
         return 1;
     }
