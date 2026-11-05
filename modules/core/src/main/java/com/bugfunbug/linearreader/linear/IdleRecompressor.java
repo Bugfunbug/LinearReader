@@ -568,6 +568,17 @@ public final class IdleRecompressor {
             Path src, Path dst, CompressionAlgorithm.Algorithm targetAlgorithm, int targetLevelOrQuality,
             boolean reuseBuffers)
             throws IOException {
+        if (targetAlgorithm == CompressionAlgorithm.Algorithm.ZSTD
+                && !ZstdSupport.isStreamingSupported()
+                && targetLevelOrQuality > ZstdSupport.FALLBACK_ONE_SHOT_MAX_LEVEL) {
+            // Streaming is unavailable on this system, so a high-level compress would be one long native call
+            // that blocks garbage collection (the freeze this code exists to avoid). In-place idle recompression
+            // isn't worth that; backups use a fast level instead (and are labeled with that level honestly).
+            if (src.equals(dst)) {
+                return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);
+            }
+            targetLevelOrQuality = ZstdSupport.FALLBACK_ONE_SHOT_MAX_LEVEL;
+        }
         LinearRegionFile.EncodedLinearFile encoded = LinearRegionFile.readEncodedLinearFile(src);
         if (encoded.headerSignature != LINEAR_SIGNATURE) {
             return new RecompressResult(RecompressOutcome.NO_SIZE_GAIN, 0L);

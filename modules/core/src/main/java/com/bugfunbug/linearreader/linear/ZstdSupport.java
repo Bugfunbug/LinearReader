@@ -13,6 +13,7 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Arrays;
 import java.util.Locale;
 
 public final class ZstdSupport {
@@ -104,6 +105,7 @@ public final class ZstdSupport {
                 }
                 try {
                     current = loadBridge();
+                    verifyBridgeWorks(current);
                     bridge = current;
                 } catch (Throwable t) {
                     throw unavailable(t);
@@ -120,6 +122,7 @@ public final class ZstdSupport {
     static void clearTestFailure() {
         testFailure = null;
         unavailableException = null;
+        clearTestStreamingFailure();
     }
 
     private static ZstdUnavailableException unavailable(Throwable cause) {
@@ -139,6 +142,15 @@ public final class ZstdSupport {
         );
         if (looksLikeAndroidFcl(cause)) {
             message.append(" Android/FCL runtime detected; the embedded zstd-jni library is not supported there.");
+        }
+        if (hasLinkageProblem(cause)) {
+            message.append(" The zstd native library on this system does not match the bundled zstd-jni version.");
+        }
+        String nativeOverride = System.getProperty("ZstdNativePath");
+        if (nativeOverride != null) {
+            message.append(" A custom native library is being forced with -DZstdNativePath=")
+                    .append(nativeOverride)
+                    .append(" - remove that launcher/JVM argument or use a matching zstd-jni version.");
         }
 
         ZstdUnavailableException failure = new ZstdUnavailableException(message.toString(), cause);
@@ -182,6 +194,114 @@ public final class ZstdSupport {
             haystack.append(' ');
         }
         haystack.append(value);
+    }
+
+    // -------------------------------------------------------------------------
+    // Streaming fallback + startup self-test
+    // -------------------------------------------------------------------------
+
+    /**
+     * True once streaming compression has been switched off (self-test or runtime failure).
+     * Held in memory only - never saved - so every game start re-checks from scratch.
+     */
+    private static volatile boolean streamingDisabled;
+    private static volatile Throwable testStreamingFailure;
+
+    /** Highest level used for one-shot compression when streaming is unavailable, to keep each native call short. */
+    static final int FALLBACK_ONE_SHOT_MAX_LEVEL = 3;
+
+    static boolean isStreamingSupported() {
+        return !streamingDisabled;
+    }
+
+    static void setTestStreamingFailure(Throwable failure) {
+        testStreamingFailure = failure;
+    }
+
+    static void clearTestStreamingFailure() {
+        testStreamingFailure = null;
+        streamingDisabled = false;
+    }
+
+    private static boolean hasLinkageProblem(Throwable t) {
+        for (int depth = 0; t != null && depth < 8; depth++, t = t.getCause()) {
+            if (t instanceof LinkageError || t instanceof UnsupportedOperationException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String rootCauseSummary(Throwable t) {
+        Throwable root = t;
+        for (int depth = 0; root.getCause() != null && depth < 8; depth++) {
+            root = root.getCause();
+        }
+        return root.getClass().getSimpleName() + ": " + root.getMessage();
+    }
+
+    private static synchronized void disableStreaming(Throwable cause) {
+        if (streamingDisabled) return;
+        streamingDisabled = true;
+        LinearRuntime.LOGGER.warn(
+                "[LinearReader] zstd streaming compression is not available on this system ({}). "
+                        + "Falling back to one-shot compression for this session; backups use a fast level "
+                        + "while this is the case. This is re-checked on every game start.",
+                rootCauseSummary(cause));
+    }
+
+    private static byte[] selfTestData() {
+        byte[] data = new byte[96 * 1024];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) ((i * 31 + (i >> 7)) & 0x3F);
+        }
+        return data;
+    }
+
+    /** Throws if the data doesn't report the right size, decompress, or round-trip back to the original. */
+    private static void requireRoundTrip(Bridge b, String label, byte[] compressed, int compressedLen,
+                                         byte[] original) {
+        long reportedSize = b.decompressedSize(compressed, 0, compressedLen);
+        if (reportedSize != original.length) {
+            throw new IllegalStateException("[LinearReader] zstd self-test failed (" + label
+                    + "): decompressedSize reported " + reportedSize + ", expected " + original.length);
+        }
+        byte[] restored = new byte[original.length];
+        long restoredLen = b.decompress(restored, 0, restored.length, compressed, 0, compressedLen);
+        if (b.isError(restoredLen) || restoredLen != original.length || !Arrays.equals(restored, original)) {
+            throw new IllegalStateException("[LinearReader] zstd self-test failed (" + label
+                    + "): data did not survive a compress/decompress round trip.");
+        }
+    }
+
+    /**
+     * Runs once, the first time zstd is loaded (startup), on tiny data (a few milliseconds).
+     * Part 1 must pass, otherwise startup is refused with a clear message: real compress,
+     * decompressedSize and decompress - the exact calls every region read and write relies on.
+     * Part 2 is optional: streaming compression in many small slices. If it fails the mod still works,
+     * using one-shot compression instead (see disableStreaming).
+     * Calls the Bridge directly, NOT the static wrappers, because those would re-enter bridge() while it is still loading.
+     */
+    private static void verifyBridgeWorks(Bridge b) {
+        byte[] original = selfTestData();
+        int level = 3;
+
+        byte[] oneShot = new byte[(int) b.compressBound(original.length)];
+        long oneShotLen = b.compress(oneShot, 0, oneShot.length, original, 0, original.length, level);
+        if (b.isError(oneShotLen)) {
+            throw new IllegalStateException("[LinearReader] zstd self-test failed: compress returned error "
+                    + b.getErrorName(oneShotLen));
+        }
+        requireRoundTrip(b, "one-shot", oneShot, (int) oneShotLen, original);
+
+        try {
+            byte[] streamed = new byte[(int) b.compressBound(original.length)];
+            long streamedLen = b.compressStreamNative(
+                    streamed, 0, streamed.length, original, 0, original.length, level, 4096);
+            requireRoundTrip(b, "streaming", streamed, (int) streamedLen, original);
+        } catch (Throwable t) {
+            disableStreaming(t);
+        }
     }
 
     private static Bridge loadBridge() {
@@ -389,9 +509,26 @@ public final class ZstdSupport {
          * the full duration a very large region body would otherwise require.
          */
         private long compressStream(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level, int sliceBytes) {
+            // Uses streaming. If the native library can't do it, switch streaming off (logged once)
+            // and redo this compression with plain one-shot compress() at the same level.
+            if (!streamingDisabled) {
+                try {
+                    return compressStreamNative(dst, dstOff, dstLen, src, srcOff, srcLen, level, sliceBytes);
+                } catch (IllegalStateException e) {
+                    if (!hasLinkageProblem(e)) throw e;
+                    disableStreaming(e);
+                    compressContexts.remove(); // drop any half-finished frame state
+                }
+            }
+            return compress(dst, dstOff, dstLen, src, srcOff, srcLen, level);
+        }
+
+        private long compressStreamNative(byte[] dst, int dstOff, int dstLen, byte[] src, int srcOff, int srcLen, int level, int sliceBytes) {
             CompressContextState state = compressContexts.get();
             state.applyLevel(level);
             try {
+                Throwable injectedStreamingFailure = testStreamingFailure;
+                if (injectedStreamingFailure != null) throw injectedStreamingFailure;
                 java.nio.ByteBuffer dstBuf = java.nio.ByteBuffer.wrap(dst, dstOff, dstLen);
                 java.nio.ByteBuffer srcBuf = java.nio.ByteBuffer.wrap(src, srcOff, srcLen);
                 int fullLimit = srcOff + srcLen;
